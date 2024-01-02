@@ -1,0 +1,37 @@
+# Private keys/secrets
+*.jks
+*.p8
+*.p12
+*.key
+.env
+
+# macOS
+.DS_Store
+
+# WSL
+*:Zone.Identifier
+
+# Temp files
+*.orig.*
+*.swp
+*.log
+
+# Node/tsc
+node_modules/
+npm-debug.*
+dist/
+
+# Yarn (uncomment for zero-install: https://stackoverflow.com/a/58550620)
+.yarn/
+#!.yarn/cache
+#!.yarn/patches
+#!.yarn/plugins
+!.yarn/releases
+#!.yarn/versions
+#!.yarn/sdks
+# .yarn/unplugged
+# .yarn/build-state.yaml
+
+# IDEs
+.idea/
+.vscode/
