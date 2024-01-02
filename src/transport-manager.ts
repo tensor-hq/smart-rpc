@@ -1,4 +1,8 @@
-import { Connection } from '@solana/web3.js';
+import { createSolanaRpcApi, createSolanaRpcSubscriptionsApi, SolanaRpcMethods, SolanaRpcSubscriptions } from '@solana/rpc-core';
+import { createJsonRpc, createJsonSubscriptionRpc } from '@solana/rpc-transport';
+import { Rpc, RpcSubscriptions } from '@solana/rpc-transport/dist/types/json-rpc-types';
+import { IRpcTransport } from '@solana/rpc-transport/dist/types/transports/transport-types';
+import { createDefaultRpcTransport } from '@solana/web3.js';
 
 // Ideas:
 // - modify weight based on "closeness" to user. For example, first ping each provider and weight by response time.
@@ -34,7 +38,7 @@ interface TransportState {
 export interface Transport {
     transport_config: TransportConfig;
     transport_state: TransportState;
-    connection: Connection;
+    transport: IRpcTransport;
 }
 
 interface Metric {
@@ -46,24 +50,24 @@ interface Metric {
 
 export class TransportManager {
     private transports: Transport[] = [];
+    private smartRpc: Rpc<SolanaRpcMethods>;
+    private smartRpcSubscriptions: RpcSubscriptions<SolanaRpcSubscriptions>;
     private metricsUrl: string = "";
-    smartConnection: Connection;
 
     constructor(initialTransports: TransportConfig[]) {
         this.updateTransports(initialTransports);
 
-        this.smartConnection = new Proxy(new Connection(this.transports[0].transport_config.url), {
-            get: (target, prop, receiver) => {
-                const originalMethod = target[prop];
-                if (typeof originalMethod === 'function' && originalMethod.constructor.name === "AsyncFunction") {
-                    return (...args) => {
-                        return this.smartTransport(prop, ...args);
-                    };
-                }
-                
-                return Reflect.get(target, prop, receiver);
-            }
-        })
+        // Set up the RPC client with the custom smart transport function.
+        this.smartRpc = createJsonRpc<SolanaRpcMethods>({
+            api: createSolanaRpcApi(),
+            transport: this.smartTransport.bind(this),
+        });
+
+        // Set up the RPC subscriptions client with the custom smart transport function.
+        this.smartRpcSubscriptions = createJsonSubscriptionRpc<SolanaRpcSubscriptions>({
+            api: createSolanaRpcSubscriptionsApi(),
+            transport: this.smartTransport.bind(this),
+        });
     }
 
     // Updates the list of transports based on the new configuration
@@ -87,6 +91,14 @@ export class TransportManager {
         return this.transports;
     }
 
+    getSmartRpc(): Rpc<SolanaRpcMethods> {
+        return this.smartRpc;
+    }
+
+    getSmartRpcSubscriptions(): RpcSubscriptions<SolanaRpcSubscriptions> {
+        return this.smartRpcSubscriptions;
+    }
+
     // Creates a transport object from configuration
     private createTransport(config: TransportConfig): Transport {
         return {
@@ -99,7 +111,7 @@ export class TransportManager {
                 disabled: false,
                 disabled_time: 0,
             },
-            connection: new Connection(config.url, "confirmed")
+            transport: createDefaultRpcTransport({ url: config.url }),
         };
     }
 
@@ -172,8 +184,9 @@ export class TransportManager {
 
     // Smart transport function that selects a transport based on weight and checks for rate limit.
     // It includes a retry mechanism with exponential backoff for handling HTTP 429 (Too Many Requests) errors.
-    async smartTransport(methodName, ...args) {
-        let availableTransports = this.transports.filter(t => !t.transport_config.blacklist.includes(methodName));
+    async smartTransport<TResponse>(...args: Parameters<IRpcTransport>): Promise<TResponse> {
+        const payload = args[0].payload as { method: string };
+        let availableTransports = this.transports.filter(t => !t.transport_config.blacklist.includes(payload.method));
     
         while (availableTransports.length > 0) {
             const transport = this.selectTransport(availableTransports);
@@ -196,16 +209,16 @@ export class TransportManager {
                     try {
                         transport.transport_state.request_count++;
     
-                        const result = await Promise.race([
-                            transport.connection[methodName](...args),
-                            this.timeout(TIMEOUT_MS)
+                        const result: TResponse = await Promise.race([
+                            transport.transport<TResponse>(...args),
+                            this.timeout<TResponse>(TIMEOUT_MS)
                         ]);
 
                         let latencyEnd = Date.now();
                         let latency = latencyEnd - latencyStart;
 
                         this.sendMetricToServer('SuccessfulRequest', { 
-                            method: methodName,
+                            method: payload.method,
                             url: transport.transport_config.url,
                             latency: latency,
                             status_code: 200
@@ -219,7 +232,7 @@ export class TransportManager {
                         let latency = latencyEnd - latencyStart;
 
                         this.sendMetricToServer('ErrorRequest', { 
-                            method: methodName,
+                            method: payload.method,
                             url: transport.transport_config.url,
                             latency: latency,
                             status_code: error.statusCode

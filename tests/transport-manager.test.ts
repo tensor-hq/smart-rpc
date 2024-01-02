@@ -1,6 +1,10 @@
-import { Connection } from '@solana/web3.js';
+import { TransportManager, TransportConfig, ERROR_THRESHOLD, RATE_LIMIT_RESET_MS, Transport } from '../src/transport-manager';
 import { expect } from 'chai';
-import { ERROR_THRESHOLD, RATE_LIMIT_RESET_MS, Transport, TransportConfig, TransportManager } from '../src/transport-manager';
+
+type RpcTransportConfig = Readonly<{
+  payload: unknown;
+  signal?: AbortSignal;
+}>;
 
 class HttpError extends Error {
   statusCode: number;
@@ -12,34 +16,24 @@ class HttpError extends Error {
   }
 }
 
-const MOCK_CONNECTION_ENDPOINT = "https://test.com";
+// Mock implementation with a generic return type
+const mockIRpcTransport = async <TResponse>(config: RpcTransportConfig): Promise<TResponse> => {
+  // You can define a default mock response or construct it based on `config`
+  const defaultMockResponse: unknown = { data: 'Mocked response' };
 
-const mockConnectionResponse = { blockhash: 'mockBlockhash', lastValidBlockHeight: 123456 };
+  // Cast the default mock response to the generic type TResponse
+  return defaultMockResponse as TResponse;
+};
 
-class MockConnection extends Connection {
-  // Mock for getLatestBlockhash method
-  async getLatestBlockhash() {
-      return mockConnectionResponse;
-  }
-}
+const mockConfig = { payload: { method: 'getLatestBlockhash' } };
 
-class MockConnection429 extends Connection {
-  // Mock for getLatestBlockhash method
-  async getLatestBlockhash() {
-    throw new HttpError(429, "Too Many Requests");
+const mockIRpcTransport429 = async <TResponse>(config: RpcTransportConfig): Promise<TResponse> => {
+  throw new HttpError(429, "Too Many Requests");
+};
 
-    return mockConnectionResponse;
-  }
-}
-
-class MockConnectionUnexpectedError extends Connection {
-  // Mock for getLatestBlockhash method
-  async getLatestBlockhash() {
-    throw new Error("Unexpected error");
-
-    return mockConnectionResponse;
-  }
-}
+const mockIRpcTransportUnexpectedError = async <TResponse>(config: RpcTransportConfig): Promise<TResponse> => {
+  throw new Error("Unexpected error");
+};
 
 const defaultTransportConfig: TransportConfig = {
   rate_limit: 50,
@@ -65,29 +59,29 @@ describe('smartTransport Tests', () => {
     let transports: Transport[] = [{
       transport_config: structuredClone(defaultTransportConfig),
       transport_state: structuredClone(defaultTransportState),
-      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport
     }];
 
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports);
     
-    const response = await transportManager.smartConnection.getLatestBlockhash();
+    const response = await transportManager.smartTransport(mockConfig);
 
-    expect(response).to.deep.equal(mockConnectionResponse);
+    expect(response).to.deep.equal({ data: 'Mocked response' });
   });
 
   it('should hit max retries', async () => {
     let transports: Transport[] = [{
       transport_config: structuredClone(defaultTransportConfig),
       transport_state: structuredClone(defaultTransportState),
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport429
     }];
 
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports);
     
     try {
-        await transportManager.smartConnection.getLatestBlockhash();
+        await transportManager.smartTransport(mockConfig);
         
         expect.fail('Expected function to throw an HTTP 429 error');
     } catch (error) {
@@ -103,14 +97,14 @@ describe('smartTransport Tests', () => {
         ...structuredClone(defaultTransportState),
         request_count: 50,
       },
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport429
     }];
 
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports);
     
     try {
-        await transportManager.smartConnection.getLatestBlockhash();
+        await transportManager.smartTransport(mockConfig);
         
         expect.fail('Expected function to throw a transport unavailable method');
     } catch (error) {
@@ -126,14 +120,14 @@ describe('smartTransport Tests', () => {
         blacklist: ['getLatestBlockhash']
       },
       transport_state: structuredClone(defaultTransportState),
-      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport
     }];
 
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports);
     
     try {
-        await transportManager.smartConnection.getLatestBlockhash();
+        await transportManager.smartTransport(mockConfig);
         
         expect.fail('Expected function to throw a transport unavailable method');
     } catch (error) {
@@ -149,29 +143,29 @@ describe('smartTransport Tests', () => {
         weight: -1,
       },
       transport_state: structuredClone(defaultTransportState),
-      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport
     }];
 
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports);
     
-    const response = await transportManager.smartConnection.getLatestBlockhash();
+    const response = await transportManager.smartTransport(mockConfig);
 
-    expect(response).to.deep.equal(mockConnectionResponse);
+    expect(response).to.deep.equal({ data: 'Mocked response' });
   });
 
   it('should handle unexpected transport error', async () => {
     let transports: Transport[] = [{
       transport_config: structuredClone(defaultTransportConfig),
       transport_state: structuredClone(defaultTransportState),
-      connection: new MockConnectionUnexpectedError(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransportUnexpectedError
     }];
 
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports);
     
     try {
-      await transportManager.smartConnection.getLatestBlockhash();
+      await transportManager.smartTransport(mockConfig);
       
       expect.fail('Expected function to throw an unexpected error');
     } catch (error) {
@@ -184,7 +178,7 @@ describe('smartTransport Tests', () => {
     let transports: Transport[] = [{
       transport_config: structuredClone(defaultTransportConfig),
       transport_state: structuredClone(defaultTransportState),
-      connection: new MockConnectionUnexpectedError(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransportUnexpectedError
     }];
 
     const transportManager = new TransportManager([defaultTransportConfig]);
@@ -192,7 +186,7 @@ describe('smartTransport Tests', () => {
 
     for (var i = 0; i <= ERROR_THRESHOLD; i++){
       try {
-        await transportManager.smartConnection.getLatestBlockhash();
+        await transportManager.smartTransport(mockConfig);
         
         expect.fail('Expected function to throw an unexpected error');
       } catch (error) {
@@ -209,14 +203,14 @@ describe('smartTransport Tests', () => {
     let transports: Transport[] = [{
       transport_config: structuredClone(defaultTransportConfig),
       transport_state: structuredClone(defaultTransportState),
-      connection: new MockConnectionUnexpectedError(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransportUnexpectedError
     }];
 
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports);
     
     try {
-      await transportManager.smartConnection.getLatestBlockhash();
+      await transportManager.smartTransport(mockConfig);
       
       expect.fail('Expected function to throw an unexpected error');
     } catch (error) {
@@ -227,14 +221,14 @@ describe('smartTransport Tests', () => {
     let updatedTransports = [{
       transport_config: structuredClone(defaultTransportConfig),
       transport_state: structuredClone(defaultTransportState),
-      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport
     }];
 
     transportManager.updateMockTransports(updatedTransports);
 
-    const response = await transportManager.smartConnection.getLatestBlockhash();
+    const response = await transportManager.smartTransport(mockConfig);
 
-    expect(response).to.deep.equal(mockConnectionResponse);
+    expect(response).to.deep.equal({ data: 'Mocked response' });
   });
 
   it('should handle failover', async () => {
@@ -245,7 +239,7 @@ describe('smartTransport Tests', () => {
           enable_failover: true,
         },
         transport_state: structuredClone(defaultTransportState),
-        connection: new MockConnectionUnexpectedError(MOCK_CONNECTION_ENDPOINT)
+        transport: mockIRpcTransportUnexpectedError
       },
       {
         transport_config: {
@@ -253,16 +247,16 @@ describe('smartTransport Tests', () => {
           weight: 0,
         },
         transport_state: structuredClone(defaultTransportState),
-        connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+        transport: mockIRpcTransport
       }
     ];
 
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports);
 
-    const response = await transportManager.smartConnection.getLatestBlockhash();
+    const response = await transportManager.smartTransport(mockConfig);
 
-    expect(response).to.deep.equal(mockConnectionResponse);
+    expect(response).to.deep.equal({ data: 'Mocked response' });
   });
 });
 
@@ -279,7 +273,7 @@ describe('resetRateLimit Tests', () => {
           request_count: 5, 
           last_reset_time: Date.now() - RATE_LIMIT_RESET_MS - 1, 
         },
-        connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+        transport: mockIRpcTransport
       }
 
       const transportManager = new TransportManager([defaultTransportConfig]);
@@ -300,7 +294,7 @@ describe('resetRateLimit Tests', () => {
         request_count: 5, 
         last_reset_time: Date.now() - (RATE_LIMIT_RESET_MS / 2), 
       },
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport
     }
 
     const transportManager = new TransportManager([defaultTransportConfig]);
@@ -322,7 +316,7 @@ describe('isRateLimitExceeded Tests', () => {
         request_count: 21, 
         last_reset_time: Date.now(), 
       },
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport
     }
 
     const transportManager = new TransportManager([defaultTransportConfig]);
@@ -341,7 +335,7 @@ describe('isRateLimitExceeded Tests', () => {
         request_count: 15, 
         last_reset_time: Date.now(), 
       },
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport
     }
 
     const transportManager = new TransportManager([defaultTransportConfig]);
@@ -362,7 +356,7 @@ describe('selectTransport Tests', () => {
         request_count: 0, 
         last_reset_time: Date.now() - RATE_LIMIT_RESET_MS - 1, 
       },
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport
     },
     {
       transport_config: {
@@ -375,7 +369,7 @@ describe('selectTransport Tests', () => {
         request_count: 21, 
         last_reset_time: Date.now(), 
       },
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport
     },
     {
       transport_config: {
@@ -388,7 +382,7 @@ describe('selectTransport Tests', () => {
         request_count: 15, 
         last_reset_time: Date.now(), 
       },
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+      transport: mockIRpcTransport
     },
   ];
 

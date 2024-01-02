@@ -1,6 +1,6 @@
 {
   "name": "@nftechie/smart-rpc",
-  "version": "1.0.7",
+  "version": "2.0.0",
   "description": "Intelligent transport layer for Solana RPCs.",
   "sideEffects": false,
   "module": "./dist/esm/index.js",
@@ -19,7 +19,10 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@solana/web3.js": "^1.87.6"
+    "@solana/rpc-core": "^2.0.0-experimental.a1fafee",
+    "@solana/rpc-transport": "^2.0.0-experimental.a1fafee",
+    "@solana/web3.js": "^2.0.0-experimental.a1fafee",
+    "ws": "^8.16.0"
   },
   "devDependencies": {
     "@types/chai": "^4.3.5",
