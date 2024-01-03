@@ -1,6 +1,6 @@
 {
   "name": "@nftechie/smart-rpc",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Intelligent transport layer for Solana RPCs.",
   "sideEffects": false,
   "module": "./dist/esm/index.js",

@@ -99,7 +99,10 @@ export class TransportManager {
                 disabled: false,
                 disabled_time: 0,
             },
-            connection: new Connection(config.url, "confirmed")
+            connection: new Connection(config.url, {
+                commitment: "confirmed",
+                disableRetryOnRateLimit: true,
+            })
         };
     }
 
