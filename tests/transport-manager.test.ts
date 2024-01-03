@@ -1,6 +1,7 @@
 import { Connection } from '@solana/web3.js';
 import { expect } from 'chai';
-import { ERROR_THRESHOLD, RATE_LIMIT_RESET_MS, Transport, TransportConfig, TransportManager } from '../src/transport-manager';
+import { ERROR_THRESHOLD, Transport, TransportConfig, TransportManager } from '../src/transport-manager';
+import { RateLimiterMemory } from 'rate-limiter-flexible';
 
 class HttpError extends Error {
   statusCode: number;
@@ -64,7 +65,13 @@ describe('smartTransport Tests', () => {
   it('should return the expected mock response', async () => {
     let transports: Transport[] = [{
       transport_config: structuredClone(defaultTransportConfig),
-      transport_state: structuredClone(defaultTransportState),
+      transport_state: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
       connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
     }];
 
@@ -79,7 +86,13 @@ describe('smartTransport Tests', () => {
   it('should hit max retries', async () => {
     let transports: Transport[] = [{
       transport_config: structuredClone(defaultTransportConfig),
-      transport_state: structuredClone(defaultTransportState),
+      transport_state: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
       connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
     }];
 
@@ -101,7 +114,10 @@ describe('smartTransport Tests', () => {
       transport_config: structuredClone(defaultTransportConfig),
       transport_state: {
         ...structuredClone(defaultTransportState),
-        request_count: 50,
+        rateLimiter: new RateLimiterMemory({
+          points: 0,
+          duration: 1,
+        })
       },
       connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
     }];
@@ -125,7 +141,13 @@ describe('smartTransport Tests', () => {
         ...structuredClone(defaultTransportConfig),
         blacklist: ['getLatestBlockhash']
       },
-      transport_state: structuredClone(defaultTransportState),
+      transport_state: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
       connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
     }];
 
@@ -148,7 +170,13 @@ describe('smartTransport Tests', () => {
         ...structuredClone(defaultTransportConfig),
         weight: -1,
       },
-      transport_state: structuredClone(defaultTransportState),
+      transport_state: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
       connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
     }];
 
@@ -163,7 +191,13 @@ describe('smartTransport Tests', () => {
   it('should handle unexpected transport error', async () => {
     let transports: Transport[] = [{
       transport_config: structuredClone(defaultTransportConfig),
-      transport_state: structuredClone(defaultTransportState),
+      transport_state: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
       connection: new MockConnectionUnexpectedError(MOCK_CONNECTION_ENDPOINT)
     }];
 
@@ -183,7 +217,13 @@ describe('smartTransport Tests', () => {
   it('should disable transport', async () => {
     let transports: Transport[] = [{
       transport_config: structuredClone(defaultTransportConfig),
-      transport_state: structuredClone(defaultTransportState),
+      transport_state: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
       connection: new MockConnectionUnexpectedError(MOCK_CONNECTION_ENDPOINT)
     }];
 
@@ -208,7 +248,13 @@ describe('smartTransport Tests', () => {
   it('should handle updating transports', async () => {
     let transports: Transport[] = [{
       transport_config: structuredClone(defaultTransportConfig),
-      transport_state: structuredClone(defaultTransportState),
+      transport_state: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
       connection: new MockConnectionUnexpectedError(MOCK_CONNECTION_ENDPOINT)
     }];
 
@@ -226,7 +272,13 @@ describe('smartTransport Tests', () => {
 
     let updatedTransports = [{
       transport_config: structuredClone(defaultTransportConfig),
-      transport_state: structuredClone(defaultTransportState),
+      transport_state: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
       connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
     }];
 
@@ -244,7 +296,13 @@ describe('smartTransport Tests', () => {
           ...structuredClone(defaultTransportConfig),
           enable_failover: true,
         },
-        transport_state: structuredClone(defaultTransportState),
+        transport_state: {
+          ...structuredClone(defaultTransportState),
+          rateLimiter: new RateLimiterMemory({
+            points: 50,
+            duration: 1,
+          })
+        },
         connection: new MockConnectionUnexpectedError(MOCK_CONNECTION_ENDPOINT)
       },
       {
@@ -252,7 +310,13 @@ describe('smartTransport Tests', () => {
           ...structuredClone(defaultTransportConfig),
           weight: 0,
         },
-        transport_state: structuredClone(defaultTransportState),
+        transport_state: {
+          ...structuredClone(defaultTransportState),
+          rateLimiter: new RateLimiterMemory({
+            points: 50,
+            duration: 1,
+          })
+        },
         connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
       }
     ];
@@ -261,57 +325,13 @@ describe('smartTransport Tests', () => {
     transportManager.updateMockTransports(transports);
 
     const response = await transportManager.smartConnection.getLatestBlockhash();
-
     expect(response).to.deep.equal(mockConnectionResponse);
   });
 });
 
-describe('resetRateLimit Tests', () => {
-  it('should reset the request count and last reset time', () => {
-      const transport: Transport = {
-        transport_config: {
-          ...structuredClone(defaultTransportConfig),
-          rate_limit: 50, 
-          weight: 10 
-        },
-        transport_state: {
-          ...structuredClone(defaultTransportState),
-          request_count: 5, 
-          last_reset_time: Date.now() - RATE_LIMIT_RESET_MS - 1, 
-        },
-        connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
-      }
-
-      const transportManager = new TransportManager([defaultTransportConfig]);
-      transportManager.resetRateLimit(transport);
-      expect(transport.transport_state.request_count).to.equal(0);
-      expect(transport.transport_state.last_reset_time).to.be.closeTo(Date.now(), 1000);
-  });
-
-  it('should not reset the request count and last reset time', () => {
-    const transport: Transport = {
-      transport_config: {
-        ...structuredClone(defaultTransportConfig),
-        rate_limit: 50, 
-        weight: 10 
-      },
-      transport_state: {
-        ...structuredClone(defaultTransportState),
-        request_count: 5, 
-        last_reset_time: Date.now() - (RATE_LIMIT_RESET_MS / 2), 
-      },
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
-    }
-
-    const transportManager = new TransportManager([defaultTransportConfig]);
-    transportManager.resetRateLimit(transport);
-    expect(transport.transport_state.request_count).to.equal(5);
-  });
-});
-
 describe('isRateLimitExceeded Tests', () => {
-  it('should return true if rate limit is exceeded', () => {
-    const transport: Transport = {
+  it('should handle rate limit exceeded', async () => {
+    const transports: Transport[] = [{
       transport_config: {
         ...structuredClone(defaultTransportConfig),
         rate_limit: 20, 
@@ -319,33 +339,23 @@ describe('isRateLimitExceeded Tests', () => {
       },
       transport_state: {
         ...structuredClone(defaultTransportState),
-        request_count: 21, 
-        last_reset_time: Date.now(), 
+        rateLimiter: new RateLimiterMemory({
+          points: 2,
+          duration: 1,
+        })
       },
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
-    }
+      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+    }]
 
     const transportManager = new TransportManager([defaultTransportConfig]);
-    expect(transportManager.isRateLimitExceeded(transport)).to.be.true;
-  });
+    transportManager.updateMockTransports(transports);
 
-  it('should return false if rate limit is not exceeded', () => {
-    const transport: Transport = {
-      transport_config: {
-        ...structuredClone(defaultTransportConfig),
-        rate_limit: 30, 
-        weight: 30 
-      },
-      transport_state: {
-        ...structuredClone(defaultTransportState),
-        request_count: 15, 
-        last_reset_time: Date.now(), 
-      },
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
-    }
+    expect(await transportManager.isRateLimitExceeded(transports[0])).to.be.false;
 
-    const transportManager = new TransportManager([defaultTransportConfig]);
-    expect(transportManager.isRateLimitExceeded(transport)).to.be.false;
+    const response = await transportManager.smartConnection.getLatestBlockhash();
+    expect(response).to.deep.equal(mockConnectionResponse);
+
+    expect(await transportManager.isRateLimitExceeded(transports[0])).to.be.true;
   });
 });
 
@@ -359,8 +369,10 @@ describe('selectTransport Tests', () => {
       },
       transport_state: {
         ...structuredClone(defaultTransportState),
-        request_count: 0, 
-        last_reset_time: Date.now() - RATE_LIMIT_RESET_MS - 1, 
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
       },
       connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
     },
@@ -372,8 +384,10 @@ describe('selectTransport Tests', () => {
       },
       transport_state: {
         ...structuredClone(defaultTransportState),
-        request_count: 21, 
-        last_reset_time: Date.now(), 
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
       },
       connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
     },
@@ -385,8 +399,10 @@ describe('selectTransport Tests', () => {
       },
       transport_state: {
         ...structuredClone(defaultTransportState),
-        request_count: 15, 
-        last_reset_time: Date.now(), 
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
       },
       connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
     },
