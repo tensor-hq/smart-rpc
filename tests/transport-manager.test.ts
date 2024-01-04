@@ -43,29 +43,27 @@ class MockConnectionUnexpectedError extends Connection {
 }
 
 const defaultTransportConfig: TransportConfig = {
-  rate_limit: 50,
+  rateLimit: 50,
   weight: 100,
   blacklist: [],
   url: 'https://api.mainnet-beta.solana.com',
-  enable_smart_disable: true,
-  enable_failover: false,
-  max_retries: 0,
+  enableSmartDisable: true,
+  enableFailover: false,
+  maxRetries: 0,
 }
 
 const defaultTransportState = {
-  request_count: 0,
-  last_reset_time: Date.now(),
-  error_count: 0,
-  last_error_reset_time: Date.now(),
+  errorCount: 0,
+  lastErrorResetTime: Date.now(),
   disabled: false,
-  disabled_time: 0,
+  disabledTime: 0,
 }
 
 describe('smartTransport Tests', () => {
   it('should return the expected mock response', async () => {
     let transports: Transport[] = [{
-      transport_config: structuredClone(defaultTransportConfig),
-      transport_state: {
+      transportConfig: structuredClone(defaultTransportConfig),
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 50,
@@ -85,8 +83,8 @@ describe('smartTransport Tests', () => {
 
   it('should hit max retries', async () => {
     let transports: Transport[] = [{
-      transport_config: structuredClone(defaultTransportConfig),
-      transport_state: {
+      transportConfig: structuredClone(defaultTransportConfig),
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 50,
@@ -111,8 +109,8 @@ describe('smartTransport Tests', () => {
 
   it('should exceed rate limit', async () => {
     let transports: Transport[] = [{
-      transport_config: structuredClone(defaultTransportConfig),
-      transport_state: {
+      transportConfig: structuredClone(defaultTransportConfig),
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 0,
@@ -137,11 +135,11 @@ describe('smartTransport Tests', () => {
 
   it('should hit blacklisted method', async () => {
     let transports: Transport[] = [{
-      transport_config: {
+      transportConfig: {
         ...structuredClone(defaultTransportConfig),
         blacklist: ['getLatestBlockhash']
       },
-      transport_state: {
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 50,
@@ -166,11 +164,11 @@ describe('smartTransport Tests', () => {
 
   it('should handle bad weight', async () => {
     let transports: Transport[] = [{
-      transport_config: {
+      transportConfig: {
         ...structuredClone(defaultTransportConfig),
         weight: -1,
       },
-      transport_state: {
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 50,
@@ -190,8 +188,8 @@ describe('smartTransport Tests', () => {
 
   it('should handle unexpected transport error', async () => {
     let transports: Transport[] = [{
-      transport_config: structuredClone(defaultTransportConfig),
-      transport_state: {
+      transportConfig: structuredClone(defaultTransportConfig),
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 50,
@@ -216,8 +214,8 @@ describe('smartTransport Tests', () => {
 
   it('should disable transport', async () => {
     let transports: Transport[] = [{
-      transport_config: structuredClone(defaultTransportConfig),
-      transport_state: {
+      transportConfig: structuredClone(defaultTransportConfig),
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 50,
@@ -242,13 +240,13 @@ describe('smartTransport Tests', () => {
     }
 
     const updatedTransports = transportManager.getTransports();
-    expect(updatedTransports[0].transport_state.disabled).to.equal(true);
+    expect(updatedTransports[0].transportState.disabled).to.equal(true);
   });
 
   it('should handle updating transports', async () => {
     let transports: Transport[] = [{
-      transport_config: structuredClone(defaultTransportConfig),
-      transport_state: {
+      transportConfig: structuredClone(defaultTransportConfig),
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 50,
@@ -270,9 +268,9 @@ describe('smartTransport Tests', () => {
       expect(error.message).to.include('Unexpected error');
     }
 
-    let updatedTransports = [{
-      transport_config: structuredClone(defaultTransportConfig),
-      transport_state: {
+    let updatedTransports: Transport[] = [{
+      transportConfig: structuredClone(defaultTransportConfig),
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 50,
@@ -292,11 +290,11 @@ describe('smartTransport Tests', () => {
   it('should handle failover', async () => {
     let transports: Transport[] = [
       {
-        transport_config: {
+        transportConfig: {
           ...structuredClone(defaultTransportConfig),
-          enable_failover: true,
+          enableFailover: true,
         },
-        transport_state: {
+        transportState: {
           ...structuredClone(defaultTransportState),
           rateLimiter: new RateLimiterMemory({
             points: 50,
@@ -306,11 +304,11 @@ describe('smartTransport Tests', () => {
         connection: new MockConnectionUnexpectedError(MOCK_CONNECTION_ENDPOINT)
       },
       {
-        transport_config: {
+        transportConfig: {
           ...structuredClone(defaultTransportConfig),
           weight: 0,
         },
-        transport_state: {
+        transportState: {
           ...structuredClone(defaultTransportState),
           rateLimiter: new RateLimiterMemory({
             points: 50,
@@ -332,12 +330,12 @@ describe('smartTransport Tests', () => {
 describe('isRateLimitExceeded Tests', () => {
   it('should handle rate limit exceeded', async () => {
     const transports: Transport[] = [{
-      transport_config: {
+      transportConfig: {
         ...structuredClone(defaultTransportConfig),
-        rate_limit: 20, 
+        rateLimit: 20, 
         weight: 20 
       },
-      transport_state: {
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 2,
@@ -362,12 +360,12 @@ describe('isRateLimitExceeded Tests', () => {
 describe('selectTransport Tests', () => {
   const transports: Transport[] = [
     {
-      transport_config: {
+      transportConfig: {
         ...structuredClone(defaultTransportConfig),
-        rate_limit: 50, 
+        rateLimit: 50, 
         weight: 0 
       },
-      transport_state: {
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 50,
@@ -377,12 +375,12 @@ describe('selectTransport Tests', () => {
       connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
     },
     {
-      transport_config: {
+      transportConfig: {
         ...structuredClone(defaultTransportConfig),
-        rate_limit: 20, 
+        rateLimit: 20, 
         weight: 100 
       },
-      transport_state: {
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 50,
@@ -392,12 +390,12 @@ describe('selectTransport Tests', () => {
       connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
     },
     {
-      transport_config: {
+      transportConfig: {
         ...structuredClone(defaultTransportConfig),
-        rate_limit: 30, 
+        rateLimit: 30, 
         weight: 0 
       },
-      transport_state: {
+      transportState: {
         ...structuredClone(defaultTransportState),
         rateLimiter: new RateLimiterMemory({
           points: 50,
@@ -422,8 +420,8 @@ describe('selectTransport Tests', () => {
 
   it('should return the third transport', () => {
     // Update weights
-    transports[1].transport_config.weight = 0;
-    transports[2].transport_config.weight = 100;
+    transports[1].transportConfig.weight = 0;
+    transports[2].transportConfig.weight = 100;
     
     const transportManager = new TransportManager([defaultTransportConfig]);
     const selected = transportManager.selectTransport(transports);

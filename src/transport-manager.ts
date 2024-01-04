@@ -14,26 +14,26 @@ const MAX_RETRY_DELAY = 3000; // Maximum delay in milliseconds
 const TIMEOUT_MS = 10000;
 
 export interface TransportConfig {
-    rate_limit: number;
+    rateLimit: number;
     weight: number;
     blacklist: string[];
     url: string;
-    enable_smart_disable: boolean;
-    enable_failover: boolean;
-    max_retries: number;
+    enableSmartDisable: boolean;
+    enableFailover: boolean;
+    maxRetries: number;
 }
 
 interface TransportState {
-    error_count: number;
-    last_error_reset_time: number;
+    errorCount: number;
+    lastErrorResetTime: number;
     disabled: boolean;
-    disabled_time: number;
+    disabledTime: number;
     rateLimiter: RateLimiterRedis | RateLimiterMemory;
 }
 
 export interface Transport {
-    transport_config: TransportConfig;
-    transport_state: TransportState;
+    transportConfig: TransportConfig;
+    transportState: TransportState;
     connection: Connection;
 }
 
@@ -41,7 +41,7 @@ interface Metric {
     method: string;
     url: string;
     latency: number;
-    status_code: number;
+    statusCode: number;
 }
 
 export class TransportManager {
@@ -54,7 +54,7 @@ export class TransportManager {
         this.redisClient = redisClient;
         this.updateTransports(initialTransports);
 
-        this.smartConnection = new Proxy(new Connection(this.transports[0].transport_config.url), {
+        this.smartConnection = new Proxy(new Connection(this.transports[0].transportConfig.url), {
             get: (target, prop, receiver) => {
                 const originalMethod = target[prop];
                 if (typeof originalMethod === 'function' && originalMethod.constructor.name === "AsyncFunction") {
@@ -97,23 +97,23 @@ export class TransportManager {
         if (this.redisClient) {
             rateLimiter = new RateLimiterRedis({
                 storeClient: this.redisClient,
-                points: config.rate_limit,
+                points: config.rateLimit,
                 duration: 1,
             });
         } else {
             rateLimiter = new RateLimiterMemory({
-                points: config.rate_limit,
+                points: config.rateLimit,
                 duration: 1,
             });
         }
 
         return {
-            transport_config: config,
-            transport_state: {
-                error_count: 0,
-                last_error_reset_time: Date.now(),
+            transportConfig: config,
+            transportState: {
+                errorCount: 0,
+                lastErrorResetTime: Date.now(),
                 disabled: false,
-                disabled_time: 0,
+                disabledTime: 0,
                 rateLimiter
             },
             connection: new Connection(config.url, {
@@ -160,11 +160,11 @@ export class TransportManager {
 
     // Selects a transport based on their weights
     selectTransport(availableTransports: Transport[]): Transport {
-        let totalWeight = availableTransports.reduce((sum, t) => sum + t.transport_config.weight, 0);
+        let totalWeight = availableTransports.reduce((sum, t) => sum + t.transportConfig.weight, 0);
         let randomNum = Math.random() * totalWeight;
     
         for (const transport of availableTransports) {
-            randomNum -= transport.transport_config.weight;
+            randomNum -= transport.transportConfig.weight;
             if (randomNum <= 0) {
                 return transport;
             }
@@ -176,7 +176,7 @@ export class TransportManager {
 
     async isRateLimitExceeded(transport: Transport): Promise<boolean> {
         try {
-            await transport.transport_state.rateLimiter.consume(transport.transport_config.url);
+            await transport.transportState.rateLimiter.consume(transport.transportConfig.url);
             return false;
         } catch (e) {
             return true;
@@ -186,15 +186,15 @@ export class TransportManager {
     // Smart transport function that selects a transport based on weight and checks for rate limit.
     // It includes a retry mechanism with exponential backoff for handling HTTP 429 (Too Many Requests) errors.
     async smartTransport(methodName, ...args) {
-        let availableTransports = this.transports.filter(t => !t.transport_config.blacklist.includes(methodName));
+        let availableTransports = this.transports.filter(t => !t.transportConfig.blacklist.includes(methodName));
     
         while (availableTransports.length > 0) {
             const transport = this.selectTransport(availableTransports);
     
-            if (transport.transport_state.disabled){
-                if (Date.now() - transport.transport_state.disabled_time >= DISABLED_RESET_MS){
-                    transport.transport_state.disabled = false;
-                    transport.transport_state.disabled_time = 0;
+            if (transport.transportState.disabled){
+                if (Date.now() - transport.transportState.disabledTime >= DISABLED_RESET_MS){
+                    transport.transportState.disabled = false;
+                    transport.transportState.disabledTime = 0;
                 } else {
                     availableTransports = availableTransports.filter(t => t !== transport);
     
@@ -203,7 +203,7 @@ export class TransportManager {
             }
     
             if (!(await this.isRateLimitExceeded(transport))) {
-                for (let attempt = 0; attempt <= transport.transport_config.max_retries; attempt++) {
+                for (let attempt = 0; attempt <= transport.transportConfig.maxRetries; attempt++) {
                     let latencyStart = Date.now();
 
                     try {
@@ -217,9 +217,9 @@ export class TransportManager {
 
                         this.sendMetricToServer('SuccessfulRequest', { 
                             method: methodName,
-                            url: transport.transport_config.url,
+                            url: transport.transportConfig.url,
                             latency: latency,
-                            status_code: 200
+                            statusCode: 200
                         });
     
                         return result;
@@ -231,29 +231,29 @@ export class TransportManager {
 
                         this.sendMetricToServer('ErrorRequest', { 
                             method: methodName,
-                            url: transport.transport_config.url,
+                            url: transport.transportConfig.url,
                             latency: latency,
-                            status_code: error.statusCode
+                            statusCode: error.statusCode
                         });
     
                         // Reset error count if enough time has passed
-                        if (currentTime - transport.transport_state.last_error_reset_time >= ERROR_RESET_MS) {
-                            transport.transport_state.error_count = 0;
-                            transport.transport_state.last_error_reset_time = currentTime;
+                        if (currentTime - transport.transportState.lastErrorResetTime >= ERROR_RESET_MS) {
+                            transport.transportState.errorCount = 0;
+                            transport.transportState.lastErrorResetTime = currentTime;
                         }
     
-                        transport.transport_state.error_count++;
+                        transport.transportState.errorCount++;
     
                         // Check if the error count exceeds a certain threshold
-                        if (transport.transport_state.error_count > ERROR_THRESHOLD && transport.transport_config.enable_smart_disable) {
-                            transport.transport_state.disabled = true;
-                            transport.transport_state.disabled_time = currentTime;
+                        if (transport.transportState.errorCount > ERROR_THRESHOLD && transport.transportConfig.enableSmartDisable) {
+                            transport.transportState.disabled = true;
+                            transport.transportState.disabledTime = currentTime;
                         }
     
                         // Throw error if max retry attempts has been reached
-                        if (attempt === transport.transport_config.max_retries) {
+                        if (attempt === transport.transportConfig.maxRetries) {
                             // If failover is enabled, break so we can try another transport
-                            if (transport.transport_config.enable_failover) {
+                            if (transport.transportConfig.enableFailover) {
                                 break
                             }
     
