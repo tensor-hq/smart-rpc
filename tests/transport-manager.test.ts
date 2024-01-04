@@ -46,6 +46,7 @@ const defaultTransportConfig: TransportConfig = {
   rateLimit: 50,
   weight: 100,
   blacklist: [],
+  id: 'MAINNET_BETA',
   url: 'https://api.mainnet-beta.solana.com',
   enableSmartDisable: true,
   enableFailover: false,

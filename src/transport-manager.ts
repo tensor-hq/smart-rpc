@@ -12,6 +12,7 @@ const DISABLED_RESET_MS = 60000; // 60 seconds
 const BASE_RETRY_DELAY = 500; // Base delay for the first retry in milliseconds
 const MAX_RETRY_DELAY = 3000; // Maximum delay in milliseconds
 const TIMEOUT_MS = 10000;
+const KEY_PREFIX = "smart-rpc-rate-limit"
 
 export interface TransportConfig {
     rateLimit: number;
@@ -87,6 +88,10 @@ export class TransportManager {
 
     // Creates a transport object from configuration
     private createTransport(config: TransportConfig): Transport {
+        if (config.id === "") {
+            throw new Error("You must provide a transport ID.");
+        }
+
         let rateLimiter: RateLimiterRedis | RateLimiterMemory;
 
         // Create a rateLimiter per transport so we can have separate rate limits.
@@ -95,11 +100,13 @@ export class TransportManager {
                 storeClient: this.redisClient,
                 points: config.rateLimit,
                 duration: 1,
+                keyPrefix: `${KEY_PREFIX}:${config.id}`
             });
         } else {
             rateLimiter = new RateLimiterMemory({
                 points: config.rateLimit,
                 duration: 1,
+                keyPrefix: `${KEY_PREFIX}:${config.id}`
             });
         }
 
