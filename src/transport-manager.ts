@@ -44,13 +44,16 @@ interface Metric {
     statusCode: number;
 }
 
+type MetricCallback = (metricName: string, metricValue: Metric) => void;
+
 export class TransportManager {
     private transports: Transport[] = [];
-    private metricsUrl: string = "";
+    private metricCallback?: MetricCallback;
     private redisClient?: Redis | Cluster;
     smartConnection: Connection;
 
-    constructor(initialTransports: TransportConfig[], redisClient?: Redis | Cluster) {
+    constructor(initialTransports: TransportConfig[], metricCallback?: MetricCallback, redisClient?: Redis | Cluster) {
+        this.metricCallback = metricCallback;
         this.redisClient = redisClient;
         this.updateTransports(initialTransports);
 
@@ -75,14 +78,6 @@ export class TransportManager {
 
     updateMockTransports(newTransports: Transport[]) {
         this.transports = newTransports;
-    }
-
-    enableMetrics(url: string) {
-        this.metricsUrl = url;
-    }
-
-    disableMetrics() {
-        this.metricsUrl = "";
     }
 
     getTransports(): Transport[] {
@@ -131,30 +126,13 @@ export class TransportManager {
         }) as Promise<TResponse>;
     }
 
-    async sendMetricToServer(metricName: string, metricValue: Metric) {
-        if (this.metricsUrl === ""){
-            return;
-        }
-
-        try {
-            const response = await fetch(this.metricsUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    // TODO: consider adding optional auth header
-                },
-                body: JSON.stringify({
-                    name: metricName,
-                    value: metricValue,
-                    timestamp: new Date().toISOString(),
-                }),
-            });
-
-            if (!response.ok) {
-                throw new Error(`Error: ${response.statusText}`);
+    triggerMetricCallback(metricName: string, metricValue: Metric) {
+        if (this.metricCallback) {
+            try {
+                this.metricCallback(metricName, metricValue);
+            } catch (e) {
+                console.error('Error in metric callback:', e);
             }
-        } catch (error) {
-            console.error('Error sending metric:', error);
         }
     }
 
@@ -215,7 +193,7 @@ export class TransportManager {
                         let latencyEnd = Date.now();
                         let latency = latencyEnd - latencyStart;
 
-                        this.sendMetricToServer('SuccessfulRequest', { 
+                        this.triggerMetricCallback('SuccessfulRequest', { 
                             method: methodName,
                             url: transport.transportConfig.url,
                             latency: latency,
@@ -229,7 +207,7 @@ export class TransportManager {
                         let latencyEnd = currentTime;
                         let latency = latencyEnd - latencyStart;
 
-                        this.sendMetricToServer('ErrorRequest', { 
+                        this.triggerMetricCallback('ErrorRequest', { 
                             method: methodName,
                             url: transport.transportConfig.url,
                             latency: latency,
