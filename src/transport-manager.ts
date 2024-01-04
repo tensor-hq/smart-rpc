@@ -1,3 +1,5 @@
+import { RateLimiterRedis, RateLimiterMemory } from 'rate-limiter-flexible';
+import Redis, { Cluster } from 'ioredis';
 import { Connection } from '@solana/web3.js';
 
 // Ideas:
@@ -5,11 +7,10 @@ import { Connection } from '@solana/web3.js';
 // - have default in code as a fallback in case our "remote config" doesn't load properly
 
 export const ERROR_THRESHOLD = 20;
-export const RATE_LIMIT_RESET_MS = 1000; // 1 second
 const ERROR_RESET_MS = 60000; // 60 seconds
 const DISABLED_RESET_MS = 60000; // 60 seconds
-const BASE_RETRY_DELAY = 100; // Base delay for the first retry in milliseconds
-const MAX_RETRY_DELAY = 1500; // Maximum delay in milliseconds
+const BASE_RETRY_DELAY = 500; // Base delay for the first retry in milliseconds
+const MAX_RETRY_DELAY = 3000; // Maximum delay in milliseconds
 const TIMEOUT_MS = 10000;
 
 export interface TransportConfig {
@@ -23,12 +24,11 @@ export interface TransportConfig {
 }
 
 interface TransportState {
-    request_count: number;
-    last_reset_time: number;
     error_count: number;
     last_error_reset_time: number;
     disabled: boolean;
     disabled_time: number;
+    rateLimiter: RateLimiterRedis | RateLimiterMemory;
 }
 
 export interface Transport {
@@ -47,9 +47,11 @@ interface Metric {
 export class TransportManager {
     private transports: Transport[] = [];
     private metricsUrl: string = "";
+    private redisClient?: Redis | Cluster;
     smartConnection: Connection;
 
-    constructor(initialTransports: TransportConfig[]) {
+    constructor(initialTransports: TransportConfig[], redisClient?: Redis | Cluster) {
+        this.redisClient = redisClient;
         this.updateTransports(initialTransports);
 
         this.smartConnection = new Proxy(new Connection(this.transports[0].transport_config.url), {
@@ -89,15 +91,30 @@ export class TransportManager {
 
     // Creates a transport object from configuration
     private createTransport(config: TransportConfig): Transport {
+        let rateLimiter: RateLimiterRedis | RateLimiterMemory;
+
+        // Create a rateLimiter per transport so we can have separate rate limits.
+        if (this.redisClient) {
+            rateLimiter = new RateLimiterRedis({
+                storeClient: this.redisClient,
+                points: config.rate_limit,
+                duration: 1,
+            });
+        } else {
+            rateLimiter = new RateLimiterMemory({
+                points: config.rate_limit,
+                duration: 1,
+            });
+        }
+
         return {
             transport_config: config,
             transport_state: {
-                request_count: 0,
-                last_reset_time: Date.now(),
                 error_count: 0,
                 last_error_reset_time: Date.now(),
                 disabled: false,
                 disabled_time: 0,
+                rateLimiter
             },
             connection: new Connection(config.url, {
                 commitment: "confirmed",
@@ -157,20 +174,13 @@ export class TransportManager {
         return availableTransports[0];
     }
 
-    // Resets the rate limit for a given transport
-    resetRateLimit(transport: Transport) {
-        const currentTime = Date.now();
-        if (currentTime - transport.transport_state.last_reset_time >= RATE_LIMIT_RESET_MS) {
-            transport.transport_state.request_count = 0;
-            transport.transport_state.last_reset_time = currentTime;
+    async isRateLimitExceeded(transport: Transport): Promise<boolean> {
+        try {
+            await transport.transport_state.rateLimiter.consume(transport.transport_config.url);
+            return false;
+        } catch (e) {
+            return true;
         }
-    }
-
-    // Checks if a transport has exceeded its rate limit
-    isRateLimitExceeded(transport: Transport) {
-        this.resetRateLimit(transport);
-    
-        return transport.transport_state.request_count >= transport.transport_config.rate_limit;
     }
 
     // Smart transport function that selects a transport based on weight and checks for rate limit.
@@ -192,13 +202,11 @@ export class TransportManager {
                 }
             }
     
-            if (!this.isRateLimitExceeded(transport)) {
+            if (!(await this.isRateLimitExceeded(transport))) {
                 for (let attempt = 0; attempt <= transport.transport_config.max_retries; attempt++) {
                     let latencyStart = Date.now();
 
                     try {
-                        transport.transport_state.request_count++;
-    
                         const result = await Promise.race([
                             transport.connection[methodName](...args),
                             this.timeout(TIMEOUT_MS)
