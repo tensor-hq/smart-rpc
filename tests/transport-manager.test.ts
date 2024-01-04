@@ -16,12 +16,24 @@ class HttpError extends Error {
 const MOCK_CONNECTION_ENDPOINT = "https://test.com";
 
 const mockConnectionResponse = { blockhash: 'mockBlockhash', lastValidBlockHeight: 123456 };
+const mockConnectionSlowResponse = { blockhash: 'mockBlockhashSlow', lastValidBlockHeight: 123455 };
 
 class MockConnection extends Connection {
   // Mock for getLatestBlockhash method
   async getLatestBlockhash() {
       return mockConnectionResponse;
   }
+}
+
+class MockConnectionSlow extends Connection {
+  // Mock for getLatestBlockhash method
+  async getLatestBlockhash(): Promise<any> {
+    return new Promise(resolve => {
+        setTimeout(() => {
+            resolve(mockConnectionSlowResponse);
+        }, 50); // 50 milliseconds delay
+    });
+}
 }
 
 class MockConnection429 extends Connection {
@@ -427,5 +439,270 @@ describe('selectTransport Tests', () => {
     const transportManager = new TransportManager([defaultTransportConfig]);
     const selected = transportManager.selectTransport(transports);
     expect(selected).to.equal(transports[2]);
+  });
+});
+
+describe('fanout Tests', () => {
+  let transports1: Transport[] = [
+    {
+      transportConfig: {
+        ...structuredClone(defaultTransportConfig),
+        weight: 50,
+      },
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
+      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+    },
+    {
+      transportConfig: {
+        ...structuredClone(defaultTransportConfig),
+        weight: 50,
+        id: "QUICKNODE",
+        url: "https://test.connection"
+      },
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
+      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+    }
+  ];
+
+  let transports2: Transport[] = [
+    {
+      transportConfig: {
+        ...structuredClone(defaultTransportConfig),
+        weight: 50,
+      },
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
+      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+    },
+    {
+      transportConfig: {
+        ...structuredClone(defaultTransportConfig),
+        weight: 50,
+        id: "QUICKNODE",
+        url: "https://test.connection"
+      },
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
+      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+    }
+  ];
+
+  let transports3: Transport[] = [
+    {
+      transportConfig: structuredClone(defaultTransportConfig),
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
+      connection: new MockConnectionUnexpectedError(MOCK_CONNECTION_ENDPOINT)
+    }
+  ];
+
+  let transports4: Transport[] = [
+    {
+      transportConfig: structuredClone(defaultTransportConfig),
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 0,
+          duration: 1,
+        })
+      },
+      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+    }
+  ];
+
+  let transports5: Transport[] = [
+    {
+      transportConfig: {
+        ...structuredClone(defaultTransportConfig),
+        blacklist: ["getLatestBlockhash"]
+      },
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
+      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+    }
+  ];
+
+  it('should return multiple results', async () => {
+    const transportManager = new TransportManager([defaultTransportConfig]);
+    transportManager.updateMockTransports(transports1);
+
+    let results = await transportManager.smartConnection.getLatestBlockhash({fanout: true} as any);
+    expect(results).to.deep.equal([mockConnectionResponse,mockConnectionResponse]);
+  });
+
+  it('should return 1 result', async () => {
+    const transportManager = new TransportManager([defaultTransportConfig]);
+    transportManager.updateMockTransports(transports2);
+
+    let results = await transportManager.smartConnection.getLatestBlockhash({fanout: true} as any);
+    expect(results).to.deep.equal([mockConnectionResponse]);
+  });
+
+  it('should return no results due to errors', async () => {
+    const transportManager = new TransportManager([defaultTransportConfig]);
+    transportManager.updateMockTransports(transports3);
+
+    let results = await transportManager.smartConnection.getLatestBlockhash({fanout: true} as any);
+    expect(results).to.deep.equal([]);
+  });
+
+  it('should return no results due to rate limit', async () => {
+    const transportManager = new TransportManager([defaultTransportConfig]);
+    transportManager.updateMockTransports(transports4);
+
+    let results = await transportManager.smartConnection.getLatestBlockhash({fanout: true} as any);
+    expect(results).to.deep.equal([]);
+  });
+
+  it('should return no results due to blacklist', async () => {
+    const transportManager = new TransportManager([defaultTransportConfig]);
+    transportManager.updateMockTransports(transports5);
+
+    let results = await transportManager.smartConnection.getLatestBlockhash({fanout: true} as any);
+    expect(results).to.deep.equal([]);
+  });
+});
+
+describe('race Tests', () => {
+  let transports1: Transport[] = [
+    {
+      transportConfig: {
+        ...structuredClone(defaultTransportConfig),
+        weight: 50,
+        id: "QUICKNODE",
+        url: "https://test.connection"
+      },
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
+      connection: new MockConnectionSlow(MOCK_CONNECTION_ENDPOINT)
+    },
+    {
+      transportConfig: {
+        ...structuredClone(defaultTransportConfig),
+        weight: 50,
+      },
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
+      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
+    }
+  ];
+
+  let transports2: Transport[] = [
+    {
+      transportConfig: {
+        ...structuredClone(defaultTransportConfig),
+        weight: 50,
+      },
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
+      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+    },
+    {
+      transportConfig: {
+        ...structuredClone(defaultTransportConfig),
+        weight: 50,
+        id: "QUICKNODE",
+        url: "https://test.connection"
+      },
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
+      connection: new MockConnectionSlow(MOCK_CONNECTION_ENDPOINT)
+    }
+  ];
+
+  let transports3: Transport[] = [
+    {
+      transportConfig: {
+        ...structuredClone(defaultTransportConfig),
+        weight: 50,
+      },
+      transportState: {
+        ...structuredClone(defaultTransportState),
+        rateLimiter: new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        })
+      },
+      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+    }
+  ];
+
+  it('should return faster response', async () => {
+    const transportManager = new TransportManager([defaultTransportConfig]);
+    transportManager.updateMockTransports(transports1);
+
+    let results = await transportManager.smartConnection.getLatestBlockhash({race: true} as any);
+    expect(results).to.deep.equal(mockConnectionResponse);
+  });
+
+  it('should return response without error', async () => {
+    const transportManager = new TransportManager([defaultTransportConfig]);
+    transportManager.updateMockTransports(transports2);
+
+    let results = await transportManager.smartConnection.getLatestBlockhash({race: true} as any);
+    expect(results).to.deep.equal(mockConnectionSlowResponse);
+  });
+
+  it('should return all transports failed error', async () => {
+    const transportManager = new TransportManager([defaultTransportConfig]);
+    transportManager.updateMockTransports(transports3);
+
+    try {
+      let results = await transportManager.smartConnection.getLatestBlockhash({race: true} as any);
+      
+      expect.fail('Error: All transports failed or timed out');
+    } catch(e){}
   });
 });

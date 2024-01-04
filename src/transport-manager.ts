@@ -11,7 +11,7 @@ const ERROR_RESET_MS = 60000; // 60 seconds
 const DISABLED_RESET_MS = 60000; // 60 seconds
 const BASE_RETRY_DELAY = 500; // Base delay for the first retry in milliseconds
 const MAX_RETRY_DELAY = 3000; // Maximum delay in milliseconds
-const TIMEOUT_MS = 10000;
+const TIMEOUT_MS = 5000;
 const KEY_PREFIX = "smart-rpc-rate-limit"
 
 export interface TransportConfig {
@@ -64,6 +64,23 @@ export class TransportManager {
                 const originalMethod = target[prop];
                 if (typeof originalMethod === 'function' && originalMethod.constructor.name === "AsyncFunction") {
                     return (...args) => {
+                        let useFanout = false;
+                        let useRace = false;
+
+                        if (args.length > 0) {
+                            const lastArg = args[args.length - 1];
+                            useFanout = typeof lastArg === 'object' && lastArg.fanout;
+                            useRace = typeof lastArg === 'object' && lastArg.race;
+                        }
+
+                        if (useFanout) {
+                            args.pop();
+                            return this.fanout(prop, ...args);
+                        } else if (useRace) {
+                            args.pop();
+                            return this.race(prop, ...args);
+                        }
+
                         return this.smartTransport(prop, ...args);
                     };
                 }
@@ -72,6 +89,26 @@ export class TransportManager {
             }
         })
     }
+
+    settleAllWithTimeout = async <T>(
+        promises: Array<Promise<T>>,
+        ): Promise<Array<T>> => {
+        const values: T[] = [];
+
+        await Promise.allSettled(
+            promises.map((promise) =>
+                Promise.race([promise, this.timeout(TIMEOUT_MS)]),
+            ),
+        ).then((result) =>
+            result.forEach((d) => {
+                if (d.status === 'fulfilled') {
+                    values.push(d.value as T);
+                }
+            }),
+        );
+
+        return values;
+    };
 
     // Updates the list of transports based on the new configuration
     updateTransports(newTransports: TransportConfig[]): void {
@@ -126,12 +163,12 @@ export class TransportManager {
         };
     }
 
-    private timeout<TResponse>(ms: number): Promise<TResponse> {
+    private timeout(ms: number): Promise<any> {
         return new Promise((_, reject) => {
             setTimeout(() => {
                 reject(new Error(`Operation timed out after ${ms} milliseconds`));
             }, ms);
-        }) as Promise<TResponse>;
+        }) as Promise<any>;
     }
 
     triggerMetricCallback(metricName: string, metricValue: Metric) {
@@ -169,9 +206,61 @@ export class TransportManager {
         }
     }
 
+    private async getAvailableTransports(methodName: string): Promise<Transport[]> {
+        // Map transports to an array of promises that resolve to true or false
+        const checkPromises = this.transports.map(async (transport) => {
+            const isBlacklisted = transport.transportConfig.blacklist.includes(methodName);
+            const isRateLimited = await this.isRateLimitExceeded(transport);
+            return !isBlacklisted && !isRateLimited;
+        });
+    
+        // Resolve all promises
+        const checks = await Promise.all(checkPromises);
+    
+        // Filter the transports based on the resolved values
+        return this.transports.filter((_, index) => checks[index]);
+    }
+
+    private async fanout(methodName, ...args): Promise<any[]> {
+        const availableTransports = await this.getAvailableTransports(methodName);
+
+        const transportPromises = availableTransports.map(transport => 
+            transport.connection[methodName](...args)
+        );
+
+        const results = await this.settleAllWithTimeout(
+            transportPromises,
+        );
+    
+        return results;
+    }
+
+    private async race(methodName, ...args): Promise<any> {
+        const availableTransports = await this.getAvailableTransports(methodName);
+
+        const transportPromises = availableTransports.map(transport => 
+            Promise.race([
+                transport.connection[methodName](...args),
+                this.timeout(TIMEOUT_MS)
+            ])
+        );
+    
+        return new Promise((resolve, reject) => {
+            let errorCount = 0;
+            transportPromises.forEach(promise => {
+                promise.then(resolve).catch(error => {
+                    errorCount++;
+                    if (errorCount === transportPromises.length) {
+                        reject(new Error("All transports failed or timed out"));
+                    }
+                });
+            });
+        });
+    }
+
     // Smart transport function that selects a transport based on weight and checks for rate limit.
     // It includes a retry mechanism with exponential backoff for handling HTTP 429 (Too Many Requests) errors.
-    async smartTransport(methodName, ...args) {
+    async smartTransport(methodName, ...args): Promise<any[]> {
         let availableTransports = this.transports.filter(t => !t.transportConfig.blacklist.includes(methodName));
     
         while (availableTransports.length > 0) {
