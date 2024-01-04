@@ -558,7 +558,7 @@ describe('fanout Tests', () => {
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports1);
 
-    let results = await transportManager.smartConnection.getLatestBlockhash({fanout: true} as any);
+    let results = await transportManager.fanoutConnection.getLatestBlockhash();
     expect(results).to.deep.equal([mockConnectionResponse,mockConnectionResponse]);
   });
 
@@ -566,7 +566,7 @@ describe('fanout Tests', () => {
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports2);
 
-    let results = await transportManager.smartConnection.getLatestBlockhash({fanout: true} as any);
+    let results = await transportManager.fanoutConnection.getLatestBlockhash();
     expect(results).to.deep.equal([mockConnectionResponse]);
   });
 
@@ -574,7 +574,7 @@ describe('fanout Tests', () => {
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports3);
 
-    let results = await transportManager.smartConnection.getLatestBlockhash({fanout: true} as any);
+    let results = await transportManager.fanoutConnection.getLatestBlockhash();
     expect(results).to.deep.equal([]);
   });
 
@@ -582,7 +582,7 @@ describe('fanout Tests', () => {
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports4);
 
-    let results = await transportManager.smartConnection.getLatestBlockhash({fanout: true} as any);
+    let results = await transportManager.fanoutConnection.getLatestBlockhash();
     expect(results).to.deep.equal([]);
   });
 
@@ -590,7 +590,7 @@ describe('fanout Tests', () => {
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports5);
 
-    let results = await transportManager.smartConnection.getLatestBlockhash({fanout: true} as any);
+    let results = await transportManager.fanoutConnection.getLatestBlockhash();
     expect(results).to.deep.equal([]);
   });
 });
@@ -683,7 +683,7 @@ describe('race Tests', () => {
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports1);
 
-    let results = await transportManager.smartConnection.getLatestBlockhash({race: true} as any);
+    let results = await transportManager.raceConnection.getLatestBlockhash();
     expect(results).to.deep.equal(mockConnectionResponse);
   });
 
@@ -691,7 +691,7 @@ describe('race Tests', () => {
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports2);
 
-    let results = await transportManager.smartConnection.getLatestBlockhash({race: true} as any);
+    let results = await transportManager.raceConnection.getLatestBlockhash();
     expect(results).to.deep.equal(mockConnectionSlowResponse);
   });
 
@@ -700,7 +700,7 @@ describe('race Tests', () => {
     transportManager.updateMockTransports(transports3);
 
     try {
-      let results = await transportManager.smartConnection.getLatestBlockhash({race: true} as any);
+      let results = await transportManager.raceConnection.getLatestBlockhash();
       
       expect.fail('Error: All transports failed or timed out');
     } catch(e){}

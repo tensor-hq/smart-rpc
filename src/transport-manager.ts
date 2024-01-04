@@ -53,35 +53,48 @@ export class TransportManager {
     private metricCallback?: MetricCallback;
     private redisClient?: Redis | Cluster;
     smartConnection: Connection;
+    fanoutConnection: Connection;
+    raceConnection: Connection;
 
     constructor(initialTransports: TransportConfig[], metricCallback?: MetricCallback, redisClient?: Redis | Cluster) {
         this.metricCallback = metricCallback;
         this.redisClient = redisClient;
         this.updateTransports(initialTransports);
 
-        this.smartConnection = new Proxy(new Connection(this.transports[0].transportConfig.url), {
+        const dummyConnection = new Connection(this.transports[0].transportConfig.url);
+
+        this.smartConnection = new Proxy(dummyConnection, {
             get: (target, prop, receiver) => {
                 const originalMethod = target[prop];
                 if (typeof originalMethod === 'function' && originalMethod.constructor.name === "AsyncFunction") {
                     return (...args) => {
-                        let useFanout = false;
-                        let useRace = false;
-
-                        if (args.length > 0) {
-                            const lastArg = args[args.length - 1];
-                            useFanout = typeof lastArg === 'object' && lastArg.fanout;
-                            useRace = typeof lastArg === 'object' && lastArg.race;
-                        }
-
-                        if (useFanout) {
-                            args.pop();
-                            return this.fanout(prop, ...args);
-                        } else if (useRace) {
-                            args.pop();
-                            return this.race(prop, ...args);
-                        }
-
                         return this.smartTransport(prop, ...args);
+                    };
+                }
+                
+                return Reflect.get(target, prop, receiver);
+            }
+        })
+
+        this.fanoutConnection = new Proxy(dummyConnection, {
+            get: (target, prop, receiver) => {
+                const originalMethod = target[prop];
+                if (typeof originalMethod === 'function' && originalMethod.constructor.name === "AsyncFunction") {
+                    return (...args) => {
+                        return this.fanout(prop, ...args);
+                    };
+                }
+                
+                return Reflect.get(target, prop, receiver);
+            }
+        })
+
+        this.raceConnection = new Proxy(dummyConnection, {
+            get: (target, prop, receiver) => {
+                const originalMethod = target[prop];
+                if (typeof originalMethod === 'function' && originalMethod.constructor.name === "AsyncFunction") {
+                    return (...args) => {
+                        return this.race(prop, ...args);
                     };
                 }
                 
