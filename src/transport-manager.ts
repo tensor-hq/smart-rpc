@@ -88,8 +88,8 @@ export class TransportManager {
 
     // Creates a transport object from configuration
     private createTransport(config: TransportConfig): Transport {
-        if (config.id === "") {
-            throw new Error("You must provide a transport ID.");
+        if (config.id === "" || config.id.includes(" ")) {
+            throw new Error("Invalid transport ID. The ID must not be empty and must not contain spaces.");
         }
 
         let rateLimiter: RateLimiterRedis | RateLimiterMemory;
