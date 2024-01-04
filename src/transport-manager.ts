@@ -18,6 +18,7 @@ export interface TransportConfig {
     weight: number;
     blacklist: string[];
     url: string;
+    id: string;
     enableSmartDisable: boolean;
     enableFailover: boolean;
     maxRetries: number;
@@ -39,7 +40,7 @@ export interface Transport {
 
 interface Metric {
     method: string;
-    url: string;
+    id: string;
     latency: number;
     statusCode: number;
 }
@@ -195,7 +196,7 @@ export class TransportManager {
 
                         this.triggerMetricCallback('SuccessfulRequest', { 
                             method: methodName,
-                            url: transport.transportConfig.url,
+                            id: transport.transportConfig.id,
                             latency: latency,
                             statusCode: 200
                         });
@@ -209,7 +210,7 @@ export class TransportManager {
 
                         this.triggerMetricCallback('ErrorRequest', { 
                             method: methodName,
-                            url: transport.transportConfig.url,
+                            id: transport.transportConfig.id,
                             latency: latency,
                             statusCode: error.statusCode
                         });
