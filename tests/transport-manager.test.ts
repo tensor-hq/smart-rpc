@@ -86,7 +86,6 @@ describe('smartTransport Tests', () => {
           transportConfig: { ...structuredClone(defaultTransportConfig), ...config.overrides },
           transportState: {
               ...structuredClone(defaultTransportState),
-              rateLimiter,
               rateLimiterQueue: new RateLimiterQueue(rateLimiter, {
                   maxQueueSize: config.rateLimiterConfig.maxQueueSize
               })
@@ -304,17 +303,14 @@ describe('smartTransport Tests', () => {
       expect(error.message).to.include('Unexpected error');
     }
 
-    let rateLimiter = new RateLimiterMemory({
-      points: 50,
-      duration: 1,
-    })
-
     let updatedTransports: Transport[] = [{
       transportConfig: structuredClone(defaultTransportConfig),
       transportState: {
         ...structuredClone(defaultTransportState),
-        rateLimiter,
-        rateLimiterQueue: new RateLimiterQueue(rateLimiter, {maxQueueSize: 500})
+        rateLimiterQueue: new RateLimiterQueue(new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        }), {maxQueueSize: 500})
       },
       connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
     }];
@@ -494,11 +490,6 @@ describe('smartTransport Tests', () => {
 });
 
 describe('selectTransport Tests', () => {
-  const rateLimiter = new RateLimiterMemory({
-    points: 50,
-    duration: 1,
-  });
-
   const transports: Transport[] = [
     {
       transportConfig: {
@@ -508,8 +499,10 @@ describe('selectTransport Tests', () => {
       },
       transportState: {
         ...structuredClone(defaultTransportState),
-        rateLimiter,
-        rateLimiterQueue: new RateLimiterQueue(rateLimiter)
+        rateLimiterQueue: new RateLimiterQueue(new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        }))
       },
       connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
     },
@@ -521,8 +514,10 @@ describe('selectTransport Tests', () => {
       },
       transportState: {
         ...structuredClone(defaultTransportState),
-        rateLimiter,
-        rateLimiterQueue: new RateLimiterQueue(rateLimiter)
+        rateLimiterQueue: new RateLimiterQueue(new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        }))
       },
       connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
     },
@@ -534,8 +529,10 @@ describe('selectTransport Tests', () => {
       },
       transportState: {
         ...structuredClone(defaultTransportState),
-        rateLimiter,
-        rateLimiterQueue: new RateLimiterQueue(rateLimiter)
+        rateLimiterQueue: new RateLimiterQueue(new RateLimiterMemory({
+          points: 50,
+          duration: 1,
+        }))
       },
       connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
     },

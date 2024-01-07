@@ -31,7 +31,6 @@ interface TransportState {
     lastErrorResetTime: number;
     disabled: boolean;
     disabledTime: number;
-    rateLimiter: RateLimiterRedis | RateLimiterMemory;
     rateLimiterQueue: RateLimiterQueue;
 }
 
@@ -173,7 +172,6 @@ export class TransportManager {
                 lastErrorResetTime: Date.now(),
                 disabled: false,
                 disabledTime: 0,
-                rateLimiter,
                 rateLimiterQueue,
             },
             connection: new Connection(config.url, {
