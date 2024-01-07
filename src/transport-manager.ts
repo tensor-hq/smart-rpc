@@ -1,4 +1,4 @@
-import { RateLimiterRedis, RateLimiterMemory } from 'rate-limiter-flexible';
+import { RateLimiterRedis, RateLimiterMemory, RateLimiterQueue } from 'rate-limiter-flexible';
 import Redis, { Cluster } from 'ioredis';
 import { Connection } from '@solana/web3.js';
 
@@ -13,6 +13,7 @@ const BASE_RETRY_DELAY = 500; // Base delay for the first retry in milliseconds
 const MAX_RETRY_DELAY = 3000; // Maximum delay in milliseconds
 const TIMEOUT_MS = 5000;
 const KEY_PREFIX = "smart-rpc-rate-limit"
+const MAX_RATE_LIMITER_QUEUE_SIZE = 500
 
 export interface TransportConfig {
     rateLimit: number;
@@ -31,6 +32,7 @@ interface TransportState {
     disabled: boolean;
     disabledTime: number;
     rateLimiter: RateLimiterRedis | RateLimiterMemory;
+    rateLimiterQueue: RateLimiterQueue;
 }
 
 export interface Transport {
@@ -160,6 +162,10 @@ export class TransportManager {
             });
         }
 
+        let rateLimiterQueue = new RateLimiterQueue(rateLimiter, {
+            maxQueueSize: MAX_RATE_LIMITER_QUEUE_SIZE
+        });
+
         return {
             transportConfig: config,
             transportState: {
@@ -167,7 +173,8 @@ export class TransportManager {
                 lastErrorResetTime: Date.now(),
                 disabled: false,
                 disabledTime: 0,
-                rateLimiter
+                rateLimiter,
+                rateLimiterQueue,
             },
             connection: new Connection(config.url, {
                 commitment: "confirmed",
@@ -210,36 +217,15 @@ export class TransportManager {
         return availableTransports[0];
     }
 
-    async isRateLimitExceeded(transport: Transport): Promise<boolean> {
-        try {
-            // This could also fail if using RateLimiterRedis and connection to Redis is faulty.
-            await transport.transportState.rateLimiter.consume(transport.transportConfig.url);
-            return false;
-        } catch (e) {
-            return true;
-        }
-    }
-
-    private async getAvailableTransports(methodName: string): Promise<Transport[]> {
-        // Map transports to an array of promises that resolve to true or false
-        const checkPromises = this.transports.map(async (transport) => {
-            const isBlacklisted = transport.transportConfig.blacklist.includes(methodName);
-            const isRateLimited = await this.isRateLimitExceeded(transport);
-            return !isBlacklisted && !isRateLimited;
-        });
-    
-        // Resolve all promises
-        const checks = await Promise.all(checkPromises);
-    
-        // Filter the transports based on the resolved values
-        return this.transports.filter((_, index) => checks[index]);
+    private availableTransportsForMethod(methodName){
+        return this.transports.filter(t => !t.transportConfig.blacklist.includes(methodName));
     }
 
     private async fanout(methodName, ...args): Promise<any[]> {
-        const availableTransports = await this.getAvailableTransports(methodName);
+        const availableTransports = this.availableTransportsForMethod(methodName);
 
         const transportPromises = availableTransports.map(transport => 
-            transport.connection[methodName](...args)
+            this.attemptSendWithRetries(transport, methodName, ...args)
         );
 
         const results = await this.settleAllWithTimeout(
@@ -250,11 +236,11 @@ export class TransportManager {
     }
 
     private async race(methodName, ...args): Promise<any> {
-        const availableTransports = await this.getAvailableTransports(methodName);
+        const availableTransports = this.availableTransportsForMethod(methodName);
 
         const transportPromises = availableTransports.map(transport => 
             Promise.race([
-                transport.connection[methodName](...args),
+                this.attemptSendWithRetries(transport, methodName, ...args),
                 this.timeout(TIMEOUT_MS)
             ])
         );
@@ -272,54 +258,69 @@ export class TransportManager {
         });
     }
 
+    private async enqueueRequest(transport: Transport, methodName, ...args): Promise<any> {
+        // Ensure that the queue exists for this transport
+        if (!transport.transportState.rateLimiterQueue) {
+            throw new Error("RateLimiterQueue is not initialized for this transport.");
+        }
+
+        await transport.transportState.rateLimiterQueue.removeTokens(1);
+
+        let latencyStart = Date.now();
+
+        try {
+            const result = await Promise.race([
+                transport.connection[methodName](...args),
+                this.timeout(TIMEOUT_MS)
+            ]);
+
+            let latencyEnd = Date.now();
+            let latency = latencyEnd - latencyStart;
+
+            this.triggerMetricCallback('SuccessfulRequest', { 
+                method: methodName,
+                id: transport.transportConfig.id,
+                latency: latency,
+                statusCode: 200
+            });
+            
+            return result;
+        } catch (error: any) {
+            const currentTime = Date.now();
+
+            let latencyEnd = currentTime;
+            let latency = latencyEnd - latencyStart;
+
+            this.triggerMetricCallback('ErrorRequest', { 
+                method: methodName,
+                id: transport.transportConfig.id,
+                latency: latency,
+                statusCode: error.statusCode
+            });
+
+            // Reset error count if enough time has passed
+            if (currentTime - transport.transportState.lastErrorResetTime >= ERROR_RESET_MS) {
+                transport.transportState.errorCount = 0;
+                transport.transportState.lastErrorResetTime = currentTime;
+            }
+
+            transport.transportState.errorCount++;
+
+            // Check if the error count exceeds a certain threshold
+            if (transport.transportState.errorCount > ERROR_THRESHOLD && transport.transportConfig.enableSmartDisable) {
+                transport.transportState.disabled = true;
+                transport.transportState.disabledTime = currentTime;
+            }
+
+            throw error;
+        }
+    }
+
     private async attemptSendWithRetries(transport: Transport, methodName, ...args){
         for (let attempt = 0; attempt <= transport.transportConfig.maxRetries; attempt++) {
-            let latencyStart = Date.now();
-
             try {
-                const result = await Promise.race([
-                    transport.connection[methodName](...args),
-                    this.timeout(TIMEOUT_MS)
-                ]);
-
-                let latencyEnd = Date.now();
-                let latency = latencyEnd - latencyStart;
-
-                this.triggerMetricCallback('SuccessfulRequest', { 
-                    method: methodName,
-                    id: transport.transportConfig.id,
-                    latency: latency,
-                    statusCode: 200
-                });
-
-                return result;
+                return await this.enqueueRequest(transport, methodName, ...args);
             } catch (error: any) {
-                const currentTime = Date.now();
-
-                let latencyEnd = currentTime;
-                let latency = latencyEnd - latencyStart;
-
-                this.triggerMetricCallback('ErrorRequest', { 
-                    method: methodName,
-                    id: transport.transportConfig.id,
-                    latency: latency,
-                    statusCode: error.statusCode
-                });
-
-                // Reset error count if enough time has passed
-                if (currentTime - transport.transportState.lastErrorResetTime >= ERROR_RESET_MS) {
-                    transport.transportState.errorCount = 0;
-                    transport.transportState.lastErrorResetTime = currentTime;
-                }
-
-                transport.transportState.errorCount++;
-
-                // Check if the error count exceeds a certain threshold
-                if (transport.transportState.errorCount > ERROR_THRESHOLD && transport.transportConfig.enableSmartDisable) {
-                    transport.transportState.disabled = true;
-                    transport.transportState.disabledTime = currentTime;
-                }
-
                 // Throw error if max retry attempts has been reached
                 if (attempt === transport.transportConfig.maxRetries) {
                     if (error.statusCode === 429 || (error.response && error.response.status === 429)) {
@@ -329,7 +330,8 @@ export class TransportManager {
                     }
                 }
 
-                let delay = Math.min(MAX_RETRY_DELAY, BASE_RETRY_DELAY * Math.pow(2, attempt)); // Exponential backoff calculation
+                // Exponential backoff
+                let delay = Math.min(MAX_RETRY_DELAY, BASE_RETRY_DELAY * Math.pow(2, attempt));
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
@@ -338,12 +340,7 @@ export class TransportManager {
     // Smart transport function that selects a transport based on weight and checks for rate limit.
     // It includes a retry mechanism with exponential backoff for handling HTTP 429 (Too Many Requests) errors.
     async smartTransport(methodName, ...args): Promise<any[]> {
-
-        // For rate limiter queue, should all of this logic happen in the callback? 
-        // Or just the attemptSendWithRetries?
-        // Maybe all? Otherwise the transports might change??
-
-        let availableTransports = this.transports.filter(t => !t.transportConfig.blacklist.includes(methodName));
+        let availableTransports = this.availableTransportsForMethod(methodName);
     
         while (availableTransports.length > 0) {
             const transport = this.selectTransport(availableTransports);
@@ -360,24 +357,23 @@ export class TransportManager {
                     continue;
                 }
             }
-    
-            if (!(await this.isRateLimitExceeded(transport))) {
-                try {
-                    return await this.attemptSendWithRetries(transport, methodName, ...args);
-                } catch(e){
-                    // If failover is disabled, surface the error.
-                    if (!transport.transportConfig.enableFailover) {
-                        throw e;
-                    }
+
+            try {
+                return await this.attemptSendWithRetries(transport, methodName, ...args);
+            } catch(e){
+                // If failover is disabled, surface the error.
+                if (!transport.transportConfig.enableFailover) {
+                    throw e;
                 }
             }
     
             // Remove a transport with exceeded rate limit and retry with the next available one
             availableTransports = availableTransports.filter(t => t !== transport);
         }
-    
-        if (this.transports.length > 0) {
-            let lastResortTransport = this.transports[0];
+
+        let lastResortTransports = this.availableTransportsForMethod(methodName);
+        if (lastResortTransports.length > 0) {
+            let lastResortTransport = lastResortTransports[0];
 
             return this.attemptSendWithRetries(lastResortTransport, methodName, ...args);
         }
