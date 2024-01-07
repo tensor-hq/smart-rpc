@@ -551,12 +551,24 @@ describe('selectTransport Tests', () => {
   });
 
   it('should return the third transport', () => {
-    // Update weights
     transports[1].transportConfig.weight = 0;
     transports[2].transportConfig.weight = 100;
     
     const transportManager = new TransportManager([defaultTransportConfig]);
     const selected = transportManager.selectTransport(transports);
     expect(selected).to.equal(transports[2]);
+  });
+
+  it('should handle strict priority mode', () => {
+    transports[0].transportConfig.weight = 25;
+    transports[1].transportConfig.weight = 60;
+    transports[2].transportConfig.weight = 15;
+    
+    const transportManager = new TransportManager([defaultTransportConfig], {strictPriorityMode: true});
+
+    for (var i = 0; i < 100; i++){
+      const selected = transportManager.selectTransport(transports);
+      expect(selected).to.equal(transports[1]);
+    }
   });
 });

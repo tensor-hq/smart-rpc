@@ -40,6 +40,13 @@ export interface Transport {
     connection: Connection;
 }
 
+interface TransportManagerConfig {
+    strictPriorityMode?: boolean;
+    metricCallback?: MetricCallback;
+    redisClient?: Redis | Cluster;
+}
+
+
 interface Metric {
     method: string;
     id: string;
@@ -53,13 +60,15 @@ export class TransportManager {
     private transports: Transport[] = [];
     private metricCallback?: MetricCallback;
     private redisClient?: Redis | Cluster;
+    private strictPriorityMode: boolean = false;
     smartConnection: Connection;
     fanoutConnection: Connection;
     raceConnection: Connection;
 
-    constructor(initialTransports: TransportConfig[], metricCallback?: MetricCallback, redisClient?: Redis | Cluster) {
-        this.metricCallback = metricCallback;
-        this.redisClient = redisClient;
+    constructor(initialTransports: TransportConfig[], config?: TransportManagerConfig) {
+        this.strictPriorityMode = config?.strictPriorityMode ?? false;
+        this.metricCallback = config?.metricCallback;
+        this.redisClient = config?.redisClient;
         this.updateTransports(initialTransports);
 
         const dummyConnection = new Connection(this.transports[0].transportConfig.url);
@@ -201,16 +210,23 @@ export class TransportManager {
 
     // Selects a transport based on their weights
     selectTransport(availableTransports: Transport[]): Transport {
+        if (this.strictPriorityMode) {
+            // Find and return the transport with the highest weight
+            return availableTransports.reduce((max, transport) => 
+                (max.transportConfig.weight > transport.transportConfig.weight) ? max : transport);
+        }
+            
+        // Your existing weighted load balancing logic
         let totalWeight = availableTransports.reduce((sum, t) => sum + t.transportConfig.weight, 0);
         let randomNum = Math.random() * totalWeight;
-    
+
         for (const transport of availableTransports) {
             randomNum -= transport.transportConfig.weight;
             if (randomNum <= 0) {
                 return transport;
             }
         }
-    
+
         // Fallback to the first transport in case of rounding errors.
         return availableTransports[0];
     }
