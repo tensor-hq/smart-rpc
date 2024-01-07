@@ -216,7 +216,7 @@ export class TransportManager {
                 (max.transportConfig.weight > transport.transportConfig.weight) ? max : transport);
         }
             
-        // Your existing weighted load balancing logic
+        // Default weighted load balancing logic
         let totalWeight = availableTransports.reduce((sum, t) => sum + t.transportConfig.weight, 0);
         let randomNum = Math.random() * totalWeight;
 
