@@ -120,7 +120,7 @@ describe('smartTransport Tests', () => {
     }
   });
 
-  it('should exceed rate limit', async () => {
+  it('should exceed rate limit and failover', async () => {
     let transports: Transport[] = [{
       transportConfig: structuredClone(defaultTransportConfig),
       transportState: {
@@ -130,23 +130,17 @@ describe('smartTransport Tests', () => {
           duration: 1,
         })
       },
-      connection: new MockConnection429(MOCK_CONNECTION_ENDPOINT)
+      connection: new MockConnection(MOCK_CONNECTION_ENDPOINT)
     }];
 
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports);
-    
-    try {
-        await transportManager.smartConnection.getLatestBlockhash();
-        
-        expect.fail('Expected function to throw a transport unavailable method');
-    } catch (error) {
-        expect(error).to.be.an('error');
-        expect(error.message).to.include('No available transports for the requested method.');
-    }
+
+    const response = await transportManager.smartConnection.getLatestBlockhash();
+    expect(response).to.deep.equal(mockConnectionResponse);
   });
 
-  it('should hit blacklisted method', async () => {
+  it('should hit blacklisted method and failover', async () => {
     let transports: Transport[] = [{
       transportConfig: {
         ...structuredClone(defaultTransportConfig),
@@ -165,14 +159,8 @@ describe('smartTransport Tests', () => {
     const transportManager = new TransportManager([defaultTransportConfig]);
     transportManager.updateMockTransports(transports);
     
-    try {
-        await transportManager.smartConnection.getLatestBlockhash();
-        
-        expect.fail('Expected function to throw a transport unavailable method');
-    } catch (error) {
-        expect(error).to.be.an('error');
-        expect(error.message).to.include('No available transports for the requested method.');
-    }
+    const response = await transportManager.smartConnection.getLatestBlockhash();
+    expect(response).to.deep.equal(mockConnectionResponse);
   });
 
   it('should handle bad weight', async () => {
