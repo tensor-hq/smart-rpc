@@ -19,25 +19,37 @@ const mockConnectionResponse = { blockhash: 'mockBlockhash', lastValidBlockHeigh
 const mockConnectionSlowResponse = { blockhash: 'mockBlockhashSlow', lastValidBlockHeight: 123455 };
 
 class MockConnection extends Connection {
-  // Mock for getLatestBlockhash method
   async getLatestBlockhash() {
       return mockConnectionResponse;
   }
 }
 
 class MockConnectionSlow extends Connection {
-  // Mock for getLatestBlockhash method
   async getLatestBlockhash(): Promise<any> {
     return new Promise(resolve => {
         setTimeout(() => {
             resolve(mockConnectionSlowResponse);
         }, 50); // 50 milliseconds delay
     });
+  }
 }
+
+class MockConnectionFlaky extends Connection {
+  async getLatestBlockhash(): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const random = Math.random();
+
+      // 50% chance to throw an error
+      if (random < 0.5) {
+        reject(new Error("Flaky Connection Error"));
+      } else {
+        resolve(mockConnectionResponse);
+      }
+    });
+  }
 }
 
 class MockConnection429 extends Connection {
-  // Mock for getLatestBlockhash method
   async getLatestBlockhash() {
     throw new HttpError(429, "Too Many Requests");
 
@@ -46,7 +58,6 @@ class MockConnection429 extends Connection {
 }
 
 class MockConnectionUnexpectedError extends Connection {
-  // Mock for getLatestBlockhash method
   async getLatestBlockhash() {
     throw new Error("Unexpected error");
 
@@ -177,9 +188,246 @@ describe('smartTransport Tests', () => {
     });
   });
 
+  it('should exceed queue size and handle retries', async () => {
+    const transportsConfig = [
+      {
+        overrides: { weight: 70, enableFailover: true, maxRetries: 2 },
+        rateLimiterConfig: { points: 1, duration: 0.01, maxQueueSize: 9 },
+        connectionType: MockConnection
+      }
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    const promises: Promise<Readonly<{ blockhash: string; lastValidBlockHeight: number; }> | Error>[] = [];
+    for (var i = 0; i < 20; i++) {
+      promises.push(transportManager.smartConnection.getLatestBlockhash());
+    }
+
+    const results = await Promise.allSettled(promises);
+
+    const successResponses = results.filter(r => r.status === 'fulfilled');
+    const failureResponses = results.filter(r => r.status === 'rejected');
+
+    expect(successResponses.length).to.equal(20, 'Expected 20 successful responses');
+    expect(failureResponses.length).to.equal(0, 'Expected 0 failed responses');
+
+    failureResponses.forEach(response => {
+      expect(response.reason.message).to.equal("Number of requests reached it's maximum 9", 'Error message should indicate maximum requests reached');
+    });
+  });
+
   it('should handle burst', async () => {
     const transportsConfig = [
       {
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 500 },
+        connectionType: MockConnection
+      }
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    const promises: Promise<Readonly<{ blockhash: string; lastValidBlockHeight: number; }> | Error>[] = [];
+    for (var i = 0; i < 200; i++) {
+      promises.push(transportManager.smartConnection.getLatestBlockhash());
+    }
+
+    const results = await Promise.allSettled(promises);
+
+    const successResponses = results.filter(r => r.status === 'fulfilled');
+
+    expect(successResponses.length).to.equal(200, 'Expected 200 successful responses');
+  });
+
+  it('should handle burst to multiple connections', async () => {
+    const transportsConfig = [
+      {
+        overrides: { weight: 25 },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 1000 },
+        connectionType: MockConnection
+      },
+      {
+        overrides: { weight: 25, enableFailover: true, maxRetries: 1 },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 500 },
+        connectionType: MockConnectionFlaky
+      },
+      {
+        overrides: { weight: 25 },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 1000 },
+        connectionType: MockConnectionSlow
+      },
+      {
+        overrides: { weight: 25, enableFailover: true },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 500 },
+        connectionType: MockConnection429
+      }
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    const promises: Promise<Readonly<{ blockhash: string; lastValidBlockHeight: number; }> | Error>[] = [];
+    for (var i = 0; i < 2000; i++) {
+      promises.push(transportManager.smartConnection.getLatestBlockhash());
+    }
+
+    const results = await Promise.allSettled(promises);
+
+    const successResponses = results.filter(r => r.status === 'fulfilled');
+
+    expect(successResponses.length).to.equal(2000, 'Expected 2000 successful responses');
+  });
+
+  it('should handle burst to multiple connections with last resort', async () => {
+    const transportsConfig = [
+      {
+        overrides: { weight: 25, enableFailover: true },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 100 },
+        connectionType: MockConnection
+      },
+      {
+        overrides: { weight: 25, enableFailover: true },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 100 },
+        connectionType: MockConnection
+      }
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    const promises: Promise<Readonly<{ blockhash: string; lastValidBlockHeight: number; }> | Error>[] = [];
+    for (var i = 0; i < 2000; i++) {
+      promises.push(transportManager.smartConnection.getLatestBlockhash());
+    }
+
+    const results = await Promise.allSettled(promises);
+
+    const successResponses = results.filter(r => r.status === 'fulfilled');
+
+    expect(successResponses.length).to.equal(2000, 'Expected 2000 successful responses');
+
+    for (var i = 0; i < successResponses.length; i++){
+      expect(successResponses[i].value).to.equal(mockConnectionResponse);
+    }
+  });
+
+  it('should handle burst failures', async () => {
+    const transportsConfig = [
+      {
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 25 },
+        connectionType: MockConnection429
+      },
+      {
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 25 },
+        connectionType: MockConnectionUnexpectedError
+      }
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    const promises: Promise<Readonly<{ blockhash: string; lastValidBlockHeight: number; }> | Error>[] = [];
+    for (var i = 0; i < 1000; i++) {
+      promises.push(transportManager.smartConnection.getLatestBlockhash());
+    }
+
+    const results = await Promise.allSettled(promises);
+
+    const successResponses = results.filter(r => r.status === 'rejected');
+
+    expect(successResponses.length).to.equal(1000, 'Expected 1000 failed responses');
+  });
+
+  it('should handle burst with failover', async () => {
+    const transportsConfig = [
+      {
+        overrides: { weight: 70, enableFailover: true },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 500 },
+        connectionType: MockConnection429
+      },
+      {
+        overrides: { weight: 10 },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 500 },
+        connectionType: MockConnection
+      },
+      {
+        overrides: { weight: 20, enableFailover: true },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 500 },
+        connectionType: MockConnectionUnexpectedError
+      }
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    const promises: Promise<Readonly<{ blockhash: string; lastValidBlockHeight: number; }> | Error>[] = [];
+    for (var i = 0; i < 200; i++) {
+      promises.push(transportManager.smartConnection.getLatestBlockhash());
+    }
+
+    const results = await Promise.allSettled(promises);
+
+    const successResponses = results.filter(r => r.status === 'fulfilled');
+
+    expect(successResponses.length).to.equal(200, 'Expected 200 successful responses');
+  });
+
+  it('should handle burst with retries', async () => {
+    const transportsConfig = [
+      {
+        overrides: { weight: 70, enableFailover: true, maxRetries: 2 },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 25 },
+        connectionType: MockConnection429
+      },
+      {
+        overrides: { weight: 10, maxRetries: 2 },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 500 },
+        connectionType: MockConnection
+      }
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    const promises: Promise<Readonly<{ blockhash: string; lastValidBlockHeight: number; }> | Error>[] = [];
+    for (var i = 0; i < 200; i++) {
+      promises.push(transportManager.smartConnection.getLatestBlockhash());
+    }
+
+    const results = await Promise.allSettled(promises);
+
+    const successResponses = results.filter(r => r.status === 'fulfilled');
+
+    expect(successResponses.length).to.equal(200, 'Expected 200 successful responses');
+  });
+
+  it('should handle flaky connection with retries', async () => {
+    const transportsConfig = [
+      {
+        overrides: { weight: 70, maxRetries: 2 },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 500 },
+        connectionType: MockConnectionFlaky
+      }
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    const promises: Promise<Readonly<{ blockhash: string; lastValidBlockHeight: number; }> | Error>[] = [];
+    for (var i = 0; i < 200; i++) {
+      promises.push(transportManager.smartConnection.getLatestBlockhash());
+    }
+
+    const results = await Promise.allSettled(promises);
+
+    const successResponses = results.filter(r => r.status === 'fulfilled');
+
+    expect(successResponses.length).to.be.greaterThanOrEqual(150, 'Expected over 150 successful responses');
+  });
+
+  it('should handle flaky connection with retries and failover', async () => {
+    const transportsConfig = [
+      {
+        overrides: { weight: 70, maxRetries: 2, enableFailover: true },
+        rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 500 },
+        connectionType: MockConnectionFlaky
+      },
+      {
+        overrides: { weight: 30, maxRetries: 0 },
         rateLimiterConfig: { points: 25, duration: 0.01, maxQueueSize: 500 },
         connectionType: MockConnection
       }

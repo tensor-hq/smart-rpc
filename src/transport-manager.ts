@@ -272,14 +272,7 @@ export class TransportManager {
         });
     }
 
-    private async enqueueRequest(transport: Transport, methodName, ...args): Promise<any> {
-        // Ensure that the queue exists for this transport
-        if (!transport.transportState.rateLimiterQueue) {
-            throw new Error("RateLimiterQueue is not initialized for this transport.");
-        }
-
-        await transport.transportState.rateLimiterQueue.removeTokens(1);
-
+    private async sendRequest(transport: Transport, methodName, ...args): Promise<any> {
         let latencyStart = Date.now();
 
         try {
@@ -328,6 +321,18 @@ export class TransportManager {
 
             throw error;
         }
+    }
+
+    private async enqueueRequest(transport: Transport, methodName, ...args): Promise<any> {
+        // Ensure that the queue exists for this transport
+        if (!transport.transportState.rateLimiterQueue) {
+            throw new Error("RateLimiterQueue is not initialized for this transport.");
+        }
+
+        // If queue is full, promise is rejected.
+        await transport.transportState.rateLimiterQueue.removeTokens(1);
+
+        return await this.sendRequest(transport, methodName, ...args);
     }
 
     private async attemptSendWithRetries(transport: Transport, methodName, ...args){
@@ -385,11 +390,16 @@ export class TransportManager {
             availableTransports = availableTransports.filter(t => t !== transport);
         }
 
+        // Worst case scenario, if all transports fall, try sending directly to the underlying connections.
+        // This bypasses the rate limiter and smart disable system, so it could lead to excess requests to providers.
+        // These requests also do not retry.
         let lastResortTransports = this.availableTransportsForMethod(methodName);
-        if (lastResortTransports.length > 0) {
-            let lastResortTransport = lastResortTransports[0];
-
-            return this.attemptSendWithRetries(lastResortTransport, methodName, ...args);
+        for (let i = 0; i < lastResortTransports.length; i++) {
+            try {
+                return await this.sendRequest(lastResortTransports[i], methodName, ...args);
+            } catch (error) {
+                console.error(`Final attempt with transport failed: ${error}`);
+            }
         }
     
         // Throw error if all available transports have been tried without success
