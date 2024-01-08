@@ -16,32 +16,44 @@ Intelligent transport layer for Solana RPCs that handles load balancing, rate li
 # Example Usage
 
 ```tsx
-import { TransportManager, TransportConfig } from '@nftechie/smart-rpc';
+import { TransportManager, TransportConfig } from '@tensor-hq/smart-rpc';
 
-let transports: TransportConfig[] = [
-    {
-        rate_limit: 50,
-        weight: 50,
-        blacklist: [],
-        url: 'https://bold-winter-brook.solana-mainnet.quiknode.pro/039710b0695699c8b2849d5903a9735260339476/',
-        enable_smart_disable: false,
-        enable_failover: false,
-        max_retries: 0,
-    },
-    {
-        rate_limit: 50,
-        weight: 50,
-        blacklist: ['getTokenLargestAccounts'],
-        url: 'https://api.mainnet-beta.solana.com',
-        enable_smart_disable: true,
-        enable_failover: true,
-        max_retries: 0,
-    }
+let defaultTransportConfig: TransportConfig[] = [
+  {
+    rateLimit: 10,
+    weight: 80,
+    blacklist: [],
+    id: "Triton",
+    url: TRITON_MAINNET_P0,
+    enableSmartDisable: true,
+    enableFailover: true,
+    maxRetries: 2,
+  },
+  {
+    rateLimit: 50,
+    weight: 20,
+    blacklist: [],
+    id: "Alchemy",
+    url: ALCHEMY_FE_EXPOSED_P0,
+    enableSmartDisable: true,
+    enableFailover: true,
+    maxRetries: 2,
+  }
 ];
 
-const transportManager = new TransportManager(transports);
-const smartConnection = transportManager.smartConnection;
+const transportManager = new TransportManager(defaultTransportConfig);
+export const smartConnection = transportManager.smartConnection;
 
 const resp = await smartConnection.getLatestBlockhash();
 console.log(resp.blockhash.toString());
 ```
+
+# Features
+
+- Weighted load balancing
+- Automated failover
+- Configurable retries
+- Smart disable & cooloff
+- In-memory rate limit queue
+- Optional pooled Redis rate limit queue
+- Optional metrics (method, provider, latency, status)
