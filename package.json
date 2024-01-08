@@ -1,6 +1,6 @@
 {
-  "name": "@nftechie/smart-rpc",
-  "version": "1.0.15",
+  "name": "@tensor-hq/smart-rpc",
+  "version": "1.0.0",
   "description": "Intelligent transport layer for Solana RPCs.",
   "sideEffects": false,
   "module": "./dist/esm/index.js",
@@ -17,7 +17,11 @@
     "publish:public": "yarn build && npm publish --access public --registry https://registry.npmjs.org",
     "publish:all": "yarn publish:private && yarn publish:public"
   },
+  "repository": "https://github.com/tensor-hq/smart-rpc.git",
   "license": "MIT",
+  "publishConfig": {
+    "@tensor-hq:registry": "https://npm.pkg.github.com"
+  },
   "dependencies": {
     "@solana/web3.js": "^1.87.6",
     "ioredis": "^5.3.2",
