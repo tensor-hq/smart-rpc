@@ -1,6 +1,6 @@
 import { Connection } from '@solana/web3.js';
 import { expect } from 'chai';
-import { ERROR_THRESHOLD, Transport, TransportConfig, TransportManager } from '../src/transport-manager';
+import { ERROR_THRESHOLD, MetricCallback, Transport, TransportConfig, TransportManager } from '../src/transport-manager';
 import { RateLimiterMemory, RateLimiterQueue } from 'rate-limiter-flexible';
 
 class HttpError extends Error {
@@ -122,6 +122,50 @@ describe('smartTransport Tests', () => {
     const response = await transportManager.smartConnection.getLatestBlockhash();
 
     expect(response).to.deep.equal(mockConnectionResponse);
+  });
+
+  it('should return error metric', async () => {
+    let statusCode = 0;
+
+    const metricCallback: MetricCallback = (metricName, metricValue) => {
+      statusCode = metricValue.statusCode;
+    };
+
+    const config = {
+      ...defaultTransportConfig,
+      url: "https://tensor-tensor-ec08.mainnet.rpcpool.com"
+    }
+
+    transportManager = new TransportManager([config], {metricCallback: metricCallback});
+
+    try {
+      await transportManager.smartConnection.getLatestBlockhash();
+      
+      expect.fail('Expected function to throw a 403 error');
+    } catch (error) {
+      expect(error).to.be.an('error');
+      expect(statusCode).to.deep.equal(403);
+    }
+  });
+
+  it('should return 403 error without retries', async () => {
+    const config = {
+      ...defaultTransportConfig,
+      url: "https://tensor-tensor-ec08.mainnet.rpcpool.com",
+      maxRetries: 4,
+    }
+
+    transportManager = new TransportManager([config]);
+
+    try {
+      await transportManager.smartConnection.getLatestBlockhash();
+      
+      expect.fail('Expected function to throw a single 403 error');
+    } catch (error) {
+      expect(error).to.be.an('error');
+      const updatedTransports = transportManager.getTransports();
+      expect(updatedTransports[0].transportState.errorCount).to.equal(1);
+    }
   });
 
   it('should hit max retries', async () => {

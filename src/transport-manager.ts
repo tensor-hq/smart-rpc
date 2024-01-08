@@ -54,7 +54,7 @@ interface Metric {
     statusCode: number;
 }
 
-type MetricCallback = (metricName: string, metricValue: Metric) => void;
+export type MetricCallback = (metricName: string, metricValue: Metric) => void;
 
 export class TransportManager {
     private transports: Transport[] = [];
@@ -293,6 +293,9 @@ export class TransportManager {
             
             return result;
         } catch (error: any) {
+            // Regex to find underlying error code in string.
+            let match = error.message?.match(/"code"\s*:\s*(\d+)/);
+
             const currentTime = Date.now();
 
             let latencyEnd = currentTime;
@@ -302,7 +305,7 @@ export class TransportManager {
                 method: methodName,
                 id: transport.transportConfig.id,
                 latency: latency,
-                statusCode: error.statusCode
+                statusCode: error.statusCode ?? (error.response && error.response.status) ?? (match && parseInt(match[1]))
             });
 
             // Reset error count if enough time has passed
@@ -340,13 +343,17 @@ export class TransportManager {
             try {
                 return await this.enqueueRequest(transport, methodName, ...args);
             } catch (error: any) {
+                let match = error.message?.match(/"code"\s*:\s*(\d+)/);
+
                 // Throw error if max retry attempts has been reached
                 if (attempt === transport.transportConfig.maxRetries) {
-                    if (error.statusCode === 429 || (error.response && error.response.status === 429)) {
+                    if (error.statusCode === 429 || (error.response && error.response.status === 429) || (match && parseInt(match[1]) === 429)) {
                         throw new Error("Maximum retry attempts reached for HTTP 429.");
                     } else {
                         throw error;
                     }
+                } else if (error.statusCode === 403 || (error.response && error.response.status === 403) || (match && parseInt(match[1]) === 403)) {
+                    throw error;
                 }
 
                 // Exponential backoff
