@@ -24,6 +24,7 @@ export interface TransportConfig {
     enableSmartDisable: boolean;
     enableFailover: boolean;
     maxRetries: number;
+    redisClient?: Redis | Cluster;
 }
 
 interface TransportState {
@@ -43,7 +44,6 @@ export interface Transport {
 interface TransportManagerConfig {
     strictPriorityMode?: boolean;
     metricCallback?: MetricCallback;
-    redisClient?: Redis | Cluster;
 }
 
 
@@ -59,7 +59,6 @@ export type MetricCallback = (metricName: string, metricValue: Metric) => void;
 export class TransportManager {
     private transports: Transport[] = [];
     private metricCallback?: MetricCallback;
-    private redisClient?: Redis | Cluster;
     private strictPriorityMode: boolean = false;
     smartConnection: Connection;
     fanoutConnection: Connection;
@@ -68,7 +67,6 @@ export class TransportManager {
     constructor(initialTransports: TransportConfig[], config?: TransportManagerConfig) {
         this.strictPriorityMode = config?.strictPriorityMode ?? false;
         this.metricCallback = config?.metricCallback;
-        this.redisClient = config?.redisClient;
         this.updateTransports(initialTransports);
 
         const dummyConnection = new Connection(this.transports[0].transportConfig.url);
@@ -155,9 +153,9 @@ export class TransportManager {
         let rateLimiter: RateLimiterRedis | RateLimiterMemory;
 
         // Create a rateLimiter per transport so we can have separate rate limits.
-        if (this.redisClient) {
+        if (config.redisClient) {
             rateLimiter = new RateLimiterRedis({
-                storeClient: this.redisClient,
+                storeClient: config.redisClient,
                 points: config.rateLimit,
                 duration: 1,
                 keyPrefix: `${KEY_PREFIX}:${config.id}`
