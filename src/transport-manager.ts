@@ -150,6 +150,14 @@ export class TransportManager {
         return this.transports;
     }
 
+    enableStrictPriortyMode(): void {
+        this.strictPriorityMode = true;
+    }
+
+    disableStrictPriortyMode(): void {
+        this.strictPriorityMode = false;
+    }
+
     // Creates a transport object from configuration
     private createTransport(config: TransportConfig): Transport {
         if (config.id === "" || config.id.includes(" ")) {
