@@ -150,11 +150,11 @@ export class TransportManager {
         return this.transports;
     }
 
-    enableStrictPriortyMode(): void {
+    enableStrictPriorityMode(): void {
         this.strictPriorityMode = true;
     }
 
-    disableStrictPriortyMode(): void {
+    disableStrictPriorityMode(): void {
         this.strictPriorityMode = false;
     }
 
