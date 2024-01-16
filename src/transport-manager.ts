@@ -41,7 +41,7 @@ export interface Transport {
     connection: Connection;
 }
 
-interface TransportManagerConfig {
+export interface TransportManagerConfig {
     strictPriorityMode?: boolean;
     metricCallback?: MetricCallback;
     queueSize?: number;
