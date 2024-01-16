@@ -11,9 +11,9 @@ const ERROR_RESET_MS = 60000; // 60 seconds
 const DISABLED_RESET_MS = 60000; // 60 seconds
 const BASE_RETRY_DELAY = 500; // Base delay for the first retry in milliseconds
 const MAX_RETRY_DELAY = 3000; // Maximum delay in milliseconds
-const TIMEOUT_MS = 5000;
+const DEFAULT_TIMEOUT_MS = 5000;
 const KEY_PREFIX = "smart-rpc-rate-limit"
-const MAX_RATE_LIMITER_QUEUE_SIZE = 500
+const DEFAULT_RATE_LIMITER_QUEUE_SIZE = 500
 
 export interface TransportConfig {
     rateLimit: number;
@@ -44,6 +44,8 @@ export interface Transport {
 interface TransportManagerConfig {
     strictPriorityMode?: boolean;
     metricCallback?: MetricCallback;
+    queueSize?: number;
+    timeoutMs?: number;
 }
 
 
@@ -60,6 +62,8 @@ export class TransportManager {
     private transports: Transport[] = [];
     private metricCallback?: MetricCallback;
     private strictPriorityMode: boolean = false;
+    private queueSize?: number;
+    private timeoutMs?: number;
     smartConnection: Connection;
     fanoutConnection: Connection;
     raceConnection: Connection;
@@ -67,6 +71,8 @@ export class TransportManager {
     constructor(initialTransports: TransportConfig[], config?: TransportManagerConfig) {
         this.strictPriorityMode = config?.strictPriorityMode ?? false;
         this.metricCallback = config?.metricCallback;
+        this.queueSize = config?.queueSize;
+        this.timeoutMs = config?.timeoutMs;
         this.updateTransports(initialTransports);
 
         const dummyConnection = new Connection(this.transports[0].transportConfig.url);
@@ -118,7 +124,7 @@ export class TransportManager {
 
         await Promise.allSettled(
             promises.map((promise) =>
-                Promise.race([promise, this.timeout(TIMEOUT_MS)]),
+                Promise.race([promise, this.timeout(this.timeoutMs ?? DEFAULT_TIMEOUT_MS)]),
             ),
         ).then((result) =>
             result.forEach((d) => {
@@ -169,7 +175,7 @@ export class TransportManager {
         }
 
         let rateLimiterQueue = new RateLimiterQueue(rateLimiter, {
-            maxQueueSize: MAX_RATE_LIMITER_QUEUE_SIZE
+            maxQueueSize: this.queueSize ?? DEFAULT_RATE_LIMITER_QUEUE_SIZE
         });
 
         return {
@@ -253,7 +259,7 @@ export class TransportManager {
         const transportPromises = availableTransports.map(transport => 
             Promise.race([
                 this.attemptSendWithRetries(transport, methodName, ...args),
-                this.timeout(TIMEOUT_MS)
+                this.timeout(this.timeoutMs ?? DEFAULT_TIMEOUT_MS)
             ])
         );
     
@@ -276,7 +282,7 @@ export class TransportManager {
         try {
             const result = await Promise.race([
                 transport.connection[methodName](...args),
-                this.timeout(TIMEOUT_MS)
+                this.timeout(this.timeoutMs ?? DEFAULT_TIMEOUT_MS)
             ]);
 
             let latencyEnd = Date.now();

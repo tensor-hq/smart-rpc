@@ -204,6 +204,62 @@ describe('smartTransport Tests', () => {
     }
   });
 
+  it('should timeout', async () => {
+    const transports: Transport[] = [
+      {
+        transportConfig: {
+          ...structuredClone(defaultTransportConfig),
+        },
+        transportState: {
+          ...structuredClone(defaultTransportState),
+          rateLimiterQueue: new RateLimiterQueue(new RateLimiterMemory({
+            points: 50,
+            duration: 1,
+          }))
+        },
+        connection: new MockConnectionSlow(MOCK_CONNECTION_ENDPOINT)
+      },
+    ];
+
+    transportManager = new TransportManager([defaultTransportConfig], { timeoutMs: 1 });
+
+    transportManager.updateMockTransports(transports);
+
+    try {
+      await transportManager.smartConnection.getLatestBlockhash();
+      
+      expect.fail('Expected function to throw a timeout error');
+    } catch (error) {
+      expect(error).to.be.an('error');
+      expect(error.message).to.include('Operation timed out after 1 milliseconds');
+    }
+  });
+
+  it('should not timeout', async () => {
+    const transports: Transport[] = [
+      {
+        transportConfig: {
+          ...structuredClone(defaultTransportConfig),
+        },
+        transportState: {
+          ...structuredClone(defaultTransportState),
+          rateLimiterQueue: new RateLimiterQueue(new RateLimiterMemory({
+            points: 50,
+            duration: 1,
+          }))
+        },
+        connection: new MockConnectionSlow(MOCK_CONNECTION_ENDPOINT)
+      },
+    ];
+
+    transportManager = new TransportManager([defaultTransportConfig], { timeoutMs: 1000 });
+
+    transportManager.updateMockTransports(transports);
+
+    const response = await transportManager.smartConnection.getLatestBlockhash();
+    expect(response).to.deep.equal(mockConnectionSlowResponse);
+  });
+
   it('should exceed queue size and handle successes and failures', async () => {
     const transportsConfig = [
       {
