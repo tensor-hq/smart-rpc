@@ -53,7 +53,7 @@ interface Metric {
     method: string;
     id: string;
     latency: number;
-    statusCode: number;
+    statusCode: number | undefined | null;
 }
 
 export type MetricCallback = (metricName: string, metricValue: Metric) => void;
