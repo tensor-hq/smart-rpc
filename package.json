@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@solana/web3.js": "^1.87.6",
-    "ioredis": "^5.0.6",
+    "ioredis": "^5.3.2",
     "rate-limiter-flexible": "^4.0.0"
   },
   "devDependencies": {
