@@ -318,6 +318,8 @@ export class TransportManager {
         statusCode: 200,
       });
 
+      result.SmartRpcProvider = transport.transportConfig.id;
+
       return result;
     } catch (error: any) {
       // Timeout exception
