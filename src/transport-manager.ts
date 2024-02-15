@@ -318,7 +318,9 @@ export class TransportManager {
         statusCode: 200,
       });
 
-      result.SmartRpcProvider = transport.transportConfig.id;
+      if(typeof result === 'object' && !!result) {
+        result.SmartRpcProvider = transport.transportConfig.id;
+      }
 
       return result;
     } catch (error: any) {
