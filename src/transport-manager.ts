@@ -43,6 +43,7 @@ export interface Transport {
 
 export interface TransportManagerConfig {
   strictPriorityMode?: boolean;
+  skipLastResortSends?: boolean;
   metricCallback?: MetricCallback;
   queueSize?: number;
   timeoutMs?: number;
@@ -69,6 +70,7 @@ export class TransportManager {
   private transports: Transport[] = [];
   private metricCallback?: MetricCallback;
   private strictPriorityMode: boolean = false;
+  private skipLastResortSends: boolean = false;
   private queueSize?: number;
   private timeoutMs?: number;
   smartConnection: Connection;
@@ -77,6 +79,7 @@ export class TransportManager {
 
   constructor(initialTransports: TransportConfig[], config?: TransportManagerConfig) {
     this.strictPriorityMode = config?.strictPriorityMode ?? false;
+    this.skipLastResortSends = config?.skipLastResortSends ?? false;
     this.metricCallback = config?.metricCallback;
     this.queueSize = config?.queueSize;
     this.timeoutMs = config?.timeoutMs;
@@ -318,7 +321,7 @@ export class TransportManager {
         statusCode: 200,
       });
 
-      if(typeof result === 'object' && !!result) {
+      if (typeof result === "object" && !!result) {
         result.SmartRpcProvider = transport.transportConfig.id;
       }
 
@@ -446,15 +449,17 @@ export class TransportManager {
       availableTransports = availableTransports.filter((t) => t !== transport);
     }
 
-    // Worst case scenario, if all transports fall, try sending directly to the underlying connections.
-    // This bypasses the rate limiter and smart disable system, so it could lead to excess requests to providers.
-    // These requests also do not retry.
-    let lastResortTransports = this.availableTransportsForMethod(methodName);
-    for (let i = 0; i < lastResortTransports.length; i++) {
-      try {
-        return await this.sendRequest(lastResortTransports[i], methodName, ...args);
-      } catch (error) {
-        console.error(`Final attempt with transport failed: ${error}`);
+    if (!this.skipLastResortSends) {
+      // Worst case scenario, if all transports fall, try sending directly to the underlying connections.
+      // This bypasses the rate limiter and smart disable system, so it could lead to excess requests to providers.
+      // These requests also do not retry.
+      let lastResortTransports = this.availableTransportsForMethod(methodName);
+      for (let i = 0; i < lastResortTransports.length; i++) {
+        try {
+          return await this.sendRequest(lastResortTransports[i], methodName, ...args);
+        } catch (error) {
+          console.error(`Final attempt with transport failed: ${error}`);
+        }
       }
     }
 
