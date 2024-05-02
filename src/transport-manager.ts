@@ -469,6 +469,6 @@ export class TransportManager {
     let error = 
       recentError ??
       new Error("No available transports for the requested method.")
-    throw recentError;
+    throw error;
   }
 }
