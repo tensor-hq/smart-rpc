@@ -419,6 +419,7 @@ export class TransportManager {
   // It includes a retry mechanism with exponential backoff for handling HTTP 429 (Too Many Requests) errors.
   async smartTransport(methodName, ...args): Promise<any[]> {
     let availableTransports = this.availableTransportsForMethod(methodName);
+    let recentError: any = null;
 
     while (availableTransports.length > 0) {
       const transport = this.selectTransport(availableTransports);
@@ -443,6 +444,7 @@ export class TransportManager {
         if (!transport.transportConfig.enableFailover) {
           throw e;
         }
+        recentError = e
       }
 
       // Remove a transport with exceeded rate limit and retry with the next available one
@@ -464,6 +466,9 @@ export class TransportManager {
     }
 
     // Throw error if all available transports have been tried without success
-    throw new Error("No available transports for the requested method.");
+    let error = 
+      recentError ??
+      new Error("No available transports for the requested method.")
+    throw recentError;
   }
 }
