@@ -87,13 +87,11 @@ export class TransportManager {
 
     const dummyConnection = new Connection(this.transports[0].transportConfig.url);
 
+    // NB: This does not work with non-async functions (e.g. subscription-related methods).
     this.smartConnection = new Proxy(dummyConnection, {
       get: (target, prop, receiver) => {
         const originalMethod = target[prop];
-        if (
-          typeof originalMethod === "function" &&
-          originalMethod.constructor.name === "AsyncFunction"
-        ) {
+        if (typeof originalMethod === "function") {
           return (...args) => {
             return this.smartTransport(prop, ...args);
           };
@@ -106,10 +104,7 @@ export class TransportManager {
     this.fanoutConnection = new Proxy(dummyConnection, {
       get: (target, prop, receiver) => {
         const originalMethod = target[prop];
-        if (
-          typeof originalMethod === "function" &&
-          originalMethod.constructor.name === "AsyncFunction"
-        ) {
+        if (typeof originalMethod === "function") {
           return (...args) => {
             return this.fanout(prop, ...args);
           };
@@ -122,10 +117,7 @@ export class TransportManager {
     this.raceConnection = new Proxy(dummyConnection, {
       get: (target, prop, receiver) => {
         const originalMethod = target[prop];
-        if (
-          typeof originalMethod === "function" &&
-          originalMethod.constructor.name === "AsyncFunction"
-        ) {
+        if (typeof originalMethod === "function") {
           return (...args) => {
             return this.race(prop, ...args);
           };
@@ -444,7 +436,7 @@ export class TransportManager {
         if (!transport.transportConfig.enableFailover) {
           throw e;
         }
-        recentError = e
+        recentError = e;
       }
 
       // Remove a transport with exceeded rate limit and retry with the next available one
@@ -466,9 +458,7 @@ export class TransportManager {
     }
 
     // Throw error if all available transports have been tried without success
-    let error = 
-      recentError ??
-      new Error("No available transports for the requested method.")
+    let error = recentError ?? new Error("No available transports for the requested method.");
     throw error;
   }
 }
