@@ -22,7 +22,7 @@ npm-debug.*
 dist/
 
 # Yarn (uncomment for zero-install: https://stackoverflow.com/a/58550620)
-.yarn/
+#.yarn/
 #!.yarn/cache
 #!.yarn/patches
 #!.yarn/plugins

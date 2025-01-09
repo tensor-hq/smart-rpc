@@ -369,7 +369,15 @@ export class TransportManager {
     }
 
     // If queue is full, promise is rejected.
+    const p0 = performance.now();
     await transport.transportState.rateLimiterQueue.removeTokens(1);
+    const rlqLatency = performance.now() - p0;
+    this.triggerMetricCallback("RateLimiterWait", {
+      method: methodName,
+      id: transport.transportConfig.id,
+      latency: rlqLatency,
+      statusCode: null,
+    });
 
     return await this.sendRequest(transport, methodName, ...args);
   }
