@@ -6,6 +6,7 @@ import {
   Transport,
   TransportConfig,
   TransportManager,
+  DISABLED_RESET_MS,
 } from "../src/transport-manager";
 import { RateLimiterMemory, RateLimiterQueue } from "rate-limiter-flexible";
 
@@ -71,6 +72,16 @@ class MockConnectionUnexpectedError extends Connection {
   }
 }
 
+class MockConnectionHighLatency extends Connection {
+  async getLatestBlockhash(): Promise<any> {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        resolve(mockConnectionResponse);
+      }, 6000); // 6 seconds delay
+    });
+  }
+}
+
 const defaultTransportConfig: TransportConfig = {
   rateLimit: 50,
   weight: 100,
@@ -80,6 +91,7 @@ const defaultTransportConfig: TransportConfig = {
   enableSmartDisable: true,
   enableFailover: false,
   maxRetries: 0,
+  enableLatencyCooloff: true
 };
 
 const defaultTransportState = {
@@ -87,6 +99,9 @@ const defaultTransportState = {
   lastErrorResetTime: Date.now(),
   disabled: false,
   disabledTime: 0,
+  latencyMetrics: [],
+  lastLatencyCalculation: 0,
+  cachedAverageLatency: 0
 };
 
 describe("smartTransport Tests", () => {
@@ -879,6 +894,80 @@ describe("smartTransport Tests", () => {
       expect(e.message).to.include("All transports failed or timed out");
     }
   });
+
+  it("should disable transport due to high latency", async () => {
+    const transportsConfig = [
+      {
+        overrides: { enableLatencyCooloff: true },
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionHighLatency,
+      },
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    // Make a few requests to build up latency metrics
+    for (let i = 0; i < 2; i++) {
+      try {
+        await transportManager.smartConnection.getLatestBlockhash();
+      } catch (error) {
+        // Ignore timeouts
+      }
+    }
+
+    // Check if transport was disabled
+    const updatedTransports = transportManager.getTransports();
+    expect(updatedTransports[0].transportState.disabled).to.equal(true);
+  }).timeout(20000);
+
+  it("should not disable transport when latency cooloff is disabled", async () => {
+    const transportsConfig = [
+      {
+        overrides: { enableLatencyCooloff: false },
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionHighLatency,
+      },
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    // Make a few requests to build up latency metrics
+    for (let i = 0; i < 2; i++) {
+      try {
+        await transportManager.smartConnection.getLatestBlockhash();
+      } catch (error) {
+        // Ignore timeouts
+      }
+    }
+
+    // Check that transport was not disabled
+    const updatedTransports = transportManager.getTransports();
+    expect(updatedTransports[0].transportState.disabled).to.equal(false);
+  }).timeout(20000);
+
+  it("should track latency metrics correctly", async () => {
+    const transportsConfig = [
+      {
+        overrides: { enableLatencyCooloff: true },
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionHighLatency,
+      },
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    // Make a request
+    try {
+      await transportManager.smartConnection.getLatestBlockhash();
+    } catch (error) {
+      // Ignore timeouts
+    }
+
+    // Check that latency metrics were recorded
+    const updatedTransports = transportManager.getTransports();
+    expect(updatedTransports[0].transportState.latencyMetrics.length).to.be.greaterThan(0);
+    expect(updatedTransports[0].transportState.latencyMetrics[0].latency).to.be.greaterThan(5000);
+  }).timeout(20000);
 });
 
 describe("selectTransport Tests", () => {
@@ -971,4 +1060,5 @@ describe("selectTransport Tests", () => {
       expect(selected).to.equal(transports[1]);
     }
   });
+  
 });

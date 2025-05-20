@@ -1,19 +1,26 @@
-import { RateLimiterRedis, RateLimiterMemory, RateLimiterQueue } from "rate-limiter-flexible";
-import Redis, { Cluster } from "ioredis";
 import { Connection } from "@solana/web3.js";
+import Redis, { Cluster } from "ioredis";
+import { RateLimiterMemory, RateLimiterQueue, RateLimiterRedis } from "rate-limiter-flexible";
 
 // Ideas:
 // - modify weight based on "closeness" to user. For example, first ping each provider and weight by response time.
 // - have default in code as a fallback in case our "remote config" doesn't load properly
 
 export const ERROR_THRESHOLD = 20;
-const ERROR_RESET_MS = 60000; // 60 seconds
-const DISABLED_RESET_MS = 60000; // 60 seconds
+export const ERROR_RESET_MS = 60000; // 60 seconds
+export const DISABLED_RESET_MS = 60000; // 60 seconds
 const BASE_RETRY_DELAY = 500; // Base delay for the first retry in milliseconds
 const MAX_RETRY_DELAY = 3000; // Maximum delay in milliseconds
 const DEFAULT_TIMEOUT_MS = 5000;
 const KEY_PREFIX = "smart-rpc-rate-limit";
 const DEFAULT_RATE_LIMITER_QUEUE_SIZE = 500;
+const LATENCY_WINDOW_MS = 10000; // 10 seconds
+const LATENCY_THRESHOLD_MS = 5000; // 5 seconds
+
+interface LatencyMetric {
+  timestamp: number;
+  latency: number;
+}
 
 export interface TransportConfig {
   rateLimit: number;
@@ -25,6 +32,7 @@ export interface TransportConfig {
   enableFailover: boolean;
   maxRetries: number;
   redisClient?: Redis | Cluster;
+  enableLatencyCooloff: boolean;
 }
 
 interface TransportState {
@@ -33,6 +41,9 @@ interface TransportState {
   disabled: boolean;
   disabledTime: number;
   rateLimiterQueue: RateLimiterQueue;
+  latencyMetrics: LatencyMetric[];
+  lastLatencyCalculation: number;
+  cachedAverageLatency: number;
 }
 
 export interface Transport {
@@ -197,15 +208,20 @@ export class TransportManager {
       maxQueueSize: this.queueSize ?? DEFAULT_RATE_LIMITER_QUEUE_SIZE,
     });
 
+    const transportState: TransportState = {
+      errorCount: 0,
+      lastErrorResetTime: Date.now(),
+      disabled: false,
+      disabledTime: 0,
+      rateLimiterQueue,
+      latencyMetrics: [],
+      lastLatencyCalculation: 0,
+      cachedAverageLatency: 0
+    };
+
     return {
       transportConfig: config,
-      transportState: {
-        errorCount: 0,
-        lastErrorResetTime: Date.now(),
-        disabled: false,
-        disabledTime: 0,
-        rateLimiterQueue,
-      },
+      transportState,
       connection: new Connection(config.url, {
         commitment: "confirmed",
         disableRetryOnRateLimit: true,
@@ -294,6 +310,56 @@ export class TransportManager {
     });
   }
 
+  private calculateAverageLatency(transport: Transport): number {
+    const now = Date.now();
+    
+    // Return cached value if it's less than 1 second old
+    if (now - transport.transportState.lastLatencyCalculation < 1000) {
+      return transport.transportState.cachedAverageLatency;
+    }
+
+    const windowStart = now - LATENCY_WINDOW_MS;
+    
+    // Filter metrics within the time window
+    const recentMetrics = transport.transportState.latencyMetrics.filter(
+      metric => metric.timestamp >= windowStart
+    );
+    
+    if (recentMetrics.length === 0) {
+      transport.transportState.cachedAverageLatency = 0;
+      transport.transportState.lastLatencyCalculation = now;
+      return 0;
+    }
+    
+    // Calculate simple average
+    const totalLatency = recentMetrics.reduce((sum, metric) => sum + metric.latency, 0);
+    const averageLatency = totalLatency / recentMetrics.length;
+    
+    // Cache the result
+    transport.transportState.cachedAverageLatency = averageLatency;
+    transport.transportState.lastLatencyCalculation = now;
+    
+    return averageLatency;
+  }
+
+  private updateLatencyMetrics(transport: Transport, latency: number) {
+    const now = Date.now();
+    const windowStart = now - LATENCY_WINDOW_MS;
+    
+    // Add new metric
+    transport.transportState.latencyMetrics.push({
+      timestamp: now,
+      latency
+    });
+    
+    // Only clean up old metrics if we have more than 1000 metrics
+    if (transport.transportState.latencyMetrics.length > 1000) {
+      transport.transportState.latencyMetrics = transport.transportState.latencyMetrics.filter(
+        metric => metric.timestamp >= windowStart
+      );
+    }
+  }
+
   private async sendRequest(transport: Transport, methodName, ...args): Promise<any> {
     let latencyStart = Date.now();
 
@@ -305,6 +371,9 @@ export class TransportManager {
 
       let latencyEnd = Date.now();
       let latency = latencyEnd - latencyStart;
+
+      // Update latency metrics
+      this.updateLatencyMetrics(transport, latency);
 
       this.triggerMetricCallback("SuccessfulRequest", {
         method: methodName,
@@ -330,6 +399,9 @@ export class TransportManager {
       let latencyEnd = currentTime;
       let latency = latencyEnd - latencyStart;
 
+      // Update latency metrics even for failed requests
+      this.updateLatencyMetrics(transport, latency);
+
       this.triggerMetricCallback("ErrorRequest", {
         method: methodName,
         id: transport.transportConfig.id,
@@ -349,11 +421,14 @@ export class TransportManager {
 
       transport.transportState.errorCount++;
 
-      // Check if the error count exceeds a certain threshold
+      // Check if the error count exceeds a certain threshold or if average latency is too high
       if (
         transport.transportState.errorCount > ERROR_THRESHOLD &&
         transport.transportConfig.enableSmartDisable
       ) {
+        transport.transportState.disabled = true;
+        transport.transportState.disabledTime = currentTime;
+      } else if (this.calculateAverageLatency(transport) > LATENCY_THRESHOLD_MS && transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff) {
         transport.transportState.disabled = true;
         transport.transportState.disabledTime = currentTime;
       }
