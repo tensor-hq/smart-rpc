@@ -77,7 +77,7 @@ class MockConnectionHighLatency extends Connection {
     return new Promise((resolve) => {
       setTimeout(() => {
         resolve(mockConnectionResponse);
-      }, 6000); // 6 seconds delay
+      }, 4000); // 4 seconds delay
     });
   }
 }
@@ -966,7 +966,7 @@ describe("smartTransport Tests", () => {
     // Check that latency metrics were recorded
     const updatedTransports = transportManager.getTransports();
     expect(updatedTransports[0].transportState.latencyMetrics.length).to.be.greaterThan(0);
-    expect(updatedTransports[0].transportState.latencyMetrics[0].latency).to.be.greaterThan(5000);
+    expect(updatedTransports[0].transportState.latencyMetrics[0].latency).to.be.greaterThan(3000);
   }).timeout(20000);
 });
 

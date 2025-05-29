@@ -15,11 +15,19 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const KEY_PREFIX = "smart-rpc-rate-limit";
 const DEFAULT_RATE_LIMITER_QUEUE_SIZE = 500;
 const LATENCY_WINDOW_MS = 10000; // 10 seconds
-const LATENCY_THRESHOLD_MS = 5000; // 5 seconds
+const DEFAULT_LATENCY_THRESHOLD_MS = 3000; // 3 seconds
+
+// Method-specific latency thresholds
+const METHOD_LATENCY_THRESHOLDS: { [key: string]: number } = {
+  getProgramAccounts: 60000, // 60 seconds
+  getTokenLargestAccounts: 5000, // 5 seconds
+  getTokenAccountsByOwner: 5000, // 5 seconds
+};
 
 interface LatencyMetric {
   timestamp: number;
   latency: number;
+  method: string;
 }
 
 export interface TransportConfig {
@@ -310,7 +318,7 @@ export class TransportManager {
     });
   }
 
-  private calculateAverageLatency(transport: Transport): number {
+  private calculateAverageLatency(transport: Transport, methodName: string): number {
     const now = Date.now();
     
     // Return cached value if it's less than 1 second old
@@ -320,9 +328,9 @@ export class TransportManager {
 
     const windowStart = now - LATENCY_WINDOW_MS;
     
-    // Filter metrics within the time window
+    // Filter metrics within the time window and for the specific method
     const recentMetrics = transport.transportState.latencyMetrics.filter(
-      metric => metric.timestamp >= windowStart
+      metric => metric.timestamp >= windowStart && metric.method === methodName
     );
     
     if (recentMetrics.length === 0) {
@@ -342,14 +350,19 @@ export class TransportManager {
     return averageLatency;
   }
 
-  private updateLatencyMetrics(transport: Transport, latency: number) {
+  private getLatencyThreshold(methodName: string): number {
+    return METHOD_LATENCY_THRESHOLDS[methodName] ?? DEFAULT_LATENCY_THRESHOLD_MS;
+  }
+
+  private updateLatencyMetrics(transport: Transport, latency: number, methodName: string) {
     const now = Date.now();
     const windowStart = now - LATENCY_WINDOW_MS;
     
     // Add new metric
     transport.transportState.latencyMetrics.push({
       timestamp: now,
-      latency
+      latency,
+      method: methodName
     });
     
     // Only clean up old metrics if we have more than 1000 metrics
@@ -373,7 +386,7 @@ export class TransportManager {
       let latency = latencyEnd - latencyStart;
 
       // Update latency metrics
-      this.updateLatencyMetrics(transport, latency);
+      this.updateLatencyMetrics(transport, latency, methodName);
 
       this.triggerMetricCallback("SuccessfulRequest", {
         method: methodName,
@@ -381,6 +394,12 @@ export class TransportManager {
         latency: latency,
         statusCode: 200,
       });
+
+      // Check if average latency is too high even for successful requests
+      if (this.calculateAverageLatency(transport, methodName) > this.getLatencyThreshold(methodName) && transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff) {
+        transport.transportState.disabled = true;
+        transport.transportState.disabledTime = Date.now();
+      }
 
       if (typeof result === "object" && !!result) {
         result.SmartRpcProvider = transport.transportConfig.id;
@@ -400,7 +419,7 @@ export class TransportManager {
       let latency = latencyEnd - latencyStart;
 
       // Update latency metrics even for failed requests
-      this.updateLatencyMetrics(transport, latency);
+      this.updateLatencyMetrics(transport, latency, methodName);
 
       this.triggerMetricCallback("ErrorRequest", {
         method: methodName,
@@ -428,7 +447,7 @@ export class TransportManager {
       ) {
         transport.transportState.disabled = true;
         transport.transportState.disabledTime = currentTime;
-      } else if (this.calculateAverageLatency(transport) > LATENCY_THRESHOLD_MS && transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff) {
+      } else if (this.calculateAverageLatency(transport, methodName) > this.getLatencyThreshold(methodName) && transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff) {
         transport.transportState.disabled = true;
         transport.transportState.disabledTime = currentTime;
       }
