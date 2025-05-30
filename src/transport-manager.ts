@@ -1,19 +1,36 @@
-import { RateLimiterRedis, RateLimiterMemory, RateLimiterQueue } from "rate-limiter-flexible";
-import Redis, { Cluster } from "ioredis";
 import { Connection } from "@solana/web3.js";
+import Redis, { Cluster } from "ioredis";
+import { RateLimiterMemory, RateLimiterQueue, RateLimiterRedis } from "rate-limiter-flexible";
 
 // Ideas:
 // - modify weight based on "closeness" to user. For example, first ping each provider and weight by response time.
 // - have default in code as a fallback in case our "remote config" doesn't load properly
 
 export const ERROR_THRESHOLD = 20;
-const ERROR_RESET_MS = 60000; // 60 seconds
-const DISABLED_RESET_MS = 60000; // 60 seconds
+export const ERROR_RESET_MS = 60000; // 60 seconds
+export const DISABLED_RESET_MS = 60000; // 60 seconds
 const BASE_RETRY_DELAY = 500; // Base delay for the first retry in milliseconds
 const MAX_RETRY_DELAY = 3000; // Maximum delay in milliseconds
 const DEFAULT_TIMEOUT_MS = 5000;
 const KEY_PREFIX = "smart-rpc-rate-limit";
 const DEFAULT_RATE_LIMITER_QUEUE_SIZE = 500;
+const LATENCY_WINDOW_MS = 10000; // 10 seconds
+const DEFAULT_LATENCY_THRESHOLD_MS = 3000; // 3 seconds
+const EWMA_HALF_LIFE_MS = 5000; // Half-life for exponential decay (5 seconds)
+const MAX_EWMA_SAMPLE_COUNT = 100; // Cap sample count to maintain responsiveness
+
+// Method-specific latency thresholds
+const METHOD_LATENCY_THRESHOLDS: { [key: string]: number } = {
+  getProgramAccounts: 60000, // 60 seconds
+  getTokenLargestAccounts: 5000, // 5 seconds
+  getTokenAccountsByOwner: 5000, // 5 seconds
+};
+
+interface MethodLatencyEWMA {
+  ewma: number;           // Exponentially weighted moving average
+  lastUpdate: number;     // Timestamp of last update (using performance.now())
+  sampleCount: number;    // Count of samples contributing to this EWMA
+}
 
 export interface TransportConfig {
   rateLimit: number;
@@ -25,6 +42,7 @@ export interface TransportConfig {
   enableFailover: boolean;
   maxRetries: number;
   redisClient?: Redis | Cluster;
+  enableLatencyCooloff: boolean;
 }
 
 interface TransportState {
@@ -33,6 +51,9 @@ interface TransportState {
   disabled: boolean;
   disabledTime: number;
   rateLimiterQueue: RateLimiterQueue;
+  methodLatencyEWMA: { [methodName: string]: MethodLatencyEWMA };
+  lastLatencyCalculation: number;
+  cachedAverageLatency: number;
 }
 
 export interface Transport {
@@ -197,15 +218,20 @@ export class TransportManager {
       maxQueueSize: this.queueSize ?? DEFAULT_RATE_LIMITER_QUEUE_SIZE,
     });
 
+    const transportState: TransportState = {
+      errorCount: 0,
+      lastErrorResetTime: Date.now(),
+      disabled: false,
+      disabledTime: 0,
+      rateLimiterQueue,
+      methodLatencyEWMA: {},
+      lastLatencyCalculation: 0,
+      cachedAverageLatency: 0
+    };
+
     return {
       transportConfig: config,
-      transportState: {
-        errorCount: 0,
-        lastErrorResetTime: Date.now(),
-        disabled: false,
-        disabledTime: 0,
-        rateLimiterQueue,
-      },
+      transportState,
       connection: new Connection(config.url, {
         commitment: "confirmed",
         disableRetryOnRateLimit: true,
@@ -294,6 +320,71 @@ export class TransportManager {
     });
   }
 
+  private calculateAverageLatency(transport: Transport, methodName: string): number {
+    const now = performance.now();
+    
+    // Return cached value if it's less than 1 second old
+    if (now - transport.transportState.lastLatencyCalculation < 1000) {
+      return transport.transportState.cachedAverageLatency;
+    }
+
+    // Get or initialize EWMA for this method
+    const ewmaData = transport.transportState.methodLatencyEWMA[methodName];
+    
+    if (!ewmaData || ewmaData.sampleCount === 0) {
+      transport.transportState.cachedAverageLatency = 0;
+      transport.transportState.lastLatencyCalculation = now;
+      return 0;
+    }
+    
+    // Apply time-based decay to the EWMA
+    const timeSinceLastUpdate = now - ewmaData.lastUpdate;
+    const decayFactor = Math.exp(-timeSinceLastUpdate / EWMA_HALF_LIFE_MS);
+    const currentEWMA = ewmaData.ewma * decayFactor;
+    
+    // Cache the result
+    transport.transportState.cachedAverageLatency = currentEWMA;
+    transport.transportState.lastLatencyCalculation = now;
+    
+    return currentEWMA;
+  }
+
+  private getLatencyThreshold(methodName: string): number {
+    return METHOD_LATENCY_THRESHOLDS[methodName] ?? DEFAULT_LATENCY_THRESHOLD_MS;
+  }
+
+  private updateLatencyMetrics(transport: Transport, latency: number, methodName: string) {
+    const now = performance.now();
+    
+    // Get or initialize EWMA for this method
+    let ewmaData = transport.transportState.methodLatencyEWMA[methodName];
+    
+    if (!ewmaData) {
+      // Initialize new EWMA data for this method
+      ewmaData = {
+        ewma: latency,
+        lastUpdate: now,
+        sampleCount: 1
+      };
+      transport.transportState.methodLatencyEWMA[methodName] = ewmaData;
+      return;
+    }
+    
+    // Calculate time-based decay
+    const timeSinceLastUpdate = now - ewmaData.lastUpdate;
+    const decayFactor = Math.exp(-timeSinceLastUpdate / EWMA_HALF_LIFE_MS);
+    
+    // Calculate smoothing factor (higher weight for newer values)
+    // Alpha decreases as sample count increases, but never goes below 0.1
+    const alpha = Math.max(0.1, 2.0 / (ewmaData.sampleCount + 1));
+    
+    // Update EWMA: apply decay to old value, then blend with new value
+    const decayedEWMA = ewmaData.ewma * decayFactor;
+    ewmaData.ewma = alpha * latency + (1 - alpha) * decayedEWMA;
+    ewmaData.lastUpdate = now;
+    ewmaData.sampleCount = Math.min(ewmaData.sampleCount + 1, MAX_EWMA_SAMPLE_COUNT);
+  }
+
   private async sendRequest(transport: Transport, methodName, ...args): Promise<any> {
     let latencyStart = Date.now();
 
@@ -306,12 +397,21 @@ export class TransportManager {
       let latencyEnd = Date.now();
       let latency = latencyEnd - latencyStart;
 
+      // Update latency metrics
+      this.updateLatencyMetrics(transport, latency, methodName);
+
       this.triggerMetricCallback("SuccessfulRequest", {
         method: methodName,
         id: transport.transportConfig.id,
         latency: latency,
         statusCode: 200,
       });
+
+      // Check if average latency is too high even for successful requests
+      if (transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff && this.calculateAverageLatency(transport, methodName) > this.getLatencyThreshold(methodName)) {
+        transport.transportState.disabled = true;
+        transport.transportState.disabledTime = Date.now();
+      }
 
       if (typeof result === "object" && !!result) {
         result.SmartRpcProvider = transport.transportConfig.id;
@@ -329,6 +429,9 @@ export class TransportManager {
 
       let latencyEnd = currentTime;
       let latency = latencyEnd - latencyStart;
+
+      // Update latency metrics even for failed requests
+      this.updateLatencyMetrics(transport, latency, methodName);
 
       this.triggerMetricCallback("ErrorRequest", {
         method: methodName,
@@ -349,11 +452,14 @@ export class TransportManager {
 
       transport.transportState.errorCount++;
 
-      // Check if the error count exceeds a certain threshold
+      // Check if the error count exceeds a certain threshold or if average latency is too high
       if (
         transport.transportState.errorCount > ERROR_THRESHOLD &&
         transport.transportConfig.enableSmartDisable
       ) {
+        transport.transportState.disabled = true;
+        transport.transportState.disabledTime = currentTime;
+      } else if (transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff && this.calculateAverageLatency(transport, methodName) > this.getLatencyThreshold(methodName)) {
         transport.transportState.disabled = true;
         transport.transportState.disabledTime = currentTime;
       }
