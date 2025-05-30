@@ -16,6 +16,8 @@ const KEY_PREFIX = "smart-rpc-rate-limit";
 const DEFAULT_RATE_LIMITER_QUEUE_SIZE = 500;
 const LATENCY_WINDOW_MS = 10000; // 10 seconds
 const DEFAULT_LATENCY_THRESHOLD_MS = 3000; // 3 seconds
+const EWMA_HALF_LIFE_MS = 5000; // Half-life for exponential decay (5 seconds)
+const MAX_EWMA_SAMPLE_COUNT = 100; // Cap sample count to maintain responsiveness
 
 // Method-specific latency thresholds
 const METHOD_LATENCY_THRESHOLDS: { [key: string]: number } = {
@@ -24,10 +26,10 @@ const METHOD_LATENCY_THRESHOLDS: { [key: string]: number } = {
   getTokenAccountsByOwner: 5000, // 5 seconds
 };
 
-interface LatencyMetric {
-  timestamp: number;
-  latency: number;
-  method: string;
+interface MethodLatencyEWMA {
+  ewma: number;           // Exponentially weighted moving average
+  lastUpdate: number;     // Timestamp of last update (using performance.now())
+  sampleCount: number;    // Count of samples contributing to this EWMA
 }
 
 export interface TransportConfig {
@@ -49,7 +51,7 @@ interface TransportState {
   disabled: boolean;
   disabledTime: number;
   rateLimiterQueue: RateLimiterQueue;
-  latencyMetrics: LatencyMetric[];
+  methodLatencyEWMA: { [methodName: string]: MethodLatencyEWMA };
   lastLatencyCalculation: number;
   cachedAverageLatency: number;
 }
@@ -222,7 +224,7 @@ export class TransportManager {
       disabled: false,
       disabledTime: 0,
       rateLimiterQueue,
-      latencyMetrics: [],
+      methodLatencyEWMA: {},
       lastLatencyCalculation: 0,
       cachedAverageLatency: 0
     };
@@ -319,35 +321,32 @@ export class TransportManager {
   }
 
   private calculateAverageLatency(transport: Transport, methodName: string): number {
-    const now = Date.now();
+    const now = performance.now();
     
     // Return cached value if it's less than 1 second old
     if (now - transport.transportState.lastLatencyCalculation < 1000) {
       return transport.transportState.cachedAverageLatency;
     }
 
-    const windowStart = now - LATENCY_WINDOW_MS;
+    // Get or initialize EWMA for this method
+    const ewmaData = transport.transportState.methodLatencyEWMA[methodName];
     
-    // Filter metrics within the time window and for the specific method
-    const recentMetrics = transport.transportState.latencyMetrics.filter(
-      metric => metric.timestamp >= windowStart && metric.method === methodName
-    );
-    
-    if (recentMetrics.length === 0) {
+    if (!ewmaData || ewmaData.sampleCount === 0) {
       transport.transportState.cachedAverageLatency = 0;
       transport.transportState.lastLatencyCalculation = now;
       return 0;
     }
     
-    // Calculate simple average
-    const totalLatency = recentMetrics.reduce((sum, metric) => sum + metric.latency, 0);
-    const averageLatency = totalLatency / recentMetrics.length;
+    // Apply time-based decay to the EWMA
+    const timeSinceLastUpdate = now - ewmaData.lastUpdate;
+    const decayFactor = Math.exp(-timeSinceLastUpdate / EWMA_HALF_LIFE_MS);
+    const currentEWMA = ewmaData.ewma * decayFactor;
     
     // Cache the result
-    transport.transportState.cachedAverageLatency = averageLatency;
+    transport.transportState.cachedAverageLatency = currentEWMA;
     transport.transportState.lastLatencyCalculation = now;
     
-    return averageLatency;
+    return currentEWMA;
   }
 
   private getLatencyThreshold(methodName: string): number {
@@ -355,22 +354,35 @@ export class TransportManager {
   }
 
   private updateLatencyMetrics(transport: Transport, latency: number, methodName: string) {
-    const now = Date.now();
-    const windowStart = now - LATENCY_WINDOW_MS;
+    const now = performance.now();
     
-    // Add new metric
-    transport.transportState.latencyMetrics.push({
-      timestamp: now,
-      latency,
-      method: methodName
-    });
+    // Get or initialize EWMA for this method
+    let ewmaData = transport.transportState.methodLatencyEWMA[methodName];
     
-    // Only clean up old metrics if we have more than 1000 metrics
-    if (transport.transportState.latencyMetrics.length > 1000) {
-      transport.transportState.latencyMetrics = transport.transportState.latencyMetrics.filter(
-        metric => metric.timestamp >= windowStart
-      );
+    if (!ewmaData) {
+      // Initialize new EWMA data for this method
+      ewmaData = {
+        ewma: latency,
+        lastUpdate: now,
+        sampleCount: 1
+      };
+      transport.transportState.methodLatencyEWMA[methodName] = ewmaData;
+      return;
     }
+    
+    // Calculate time-based decay
+    const timeSinceLastUpdate = now - ewmaData.lastUpdate;
+    const decayFactor = Math.exp(-timeSinceLastUpdate / EWMA_HALF_LIFE_MS);
+    
+    // Calculate smoothing factor (higher weight for newer values)
+    // Alpha decreases as sample count increases, but never goes below 0.1
+    const alpha = Math.max(0.1, 2.0 / (ewmaData.sampleCount + 1));
+    
+    // Update EWMA: apply decay to old value, then blend with new value
+    const decayedEWMA = ewmaData.ewma * decayFactor;
+    ewmaData.ewma = alpha * latency + (1 - alpha) * decayedEWMA;
+    ewmaData.lastUpdate = now;
+    ewmaData.sampleCount = Math.min(ewmaData.sampleCount + 1, MAX_EWMA_SAMPLE_COUNT);
   }
 
   private async sendRequest(transport: Transport, methodName, ...args): Promise<any> {
@@ -396,7 +408,7 @@ export class TransportManager {
       });
 
       // Check if average latency is too high even for successful requests
-      if (this.calculateAverageLatency(transport, methodName) > this.getLatencyThreshold(methodName) && transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff) {
+      if (transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff && this.calculateAverageLatency(transport, methodName) > this.getLatencyThreshold(methodName)) {
         transport.transportState.disabled = true;
         transport.transportState.disabledTime = Date.now();
       }
@@ -447,7 +459,7 @@ export class TransportManager {
       ) {
         transport.transportState.disabled = true;
         transport.transportState.disabledTime = currentTime;
-      } else if (this.calculateAverageLatency(transport, methodName) > this.getLatencyThreshold(methodName) && transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff) {
+      } else if (transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff && this.calculateAverageLatency(transport, methodName) > this.getLatencyThreshold(methodName)) {
         transport.transportState.disabled = true;
         transport.transportState.disabledTime = currentTime;
       }

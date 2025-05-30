@@ -99,7 +99,7 @@ const defaultTransportState = {
   lastErrorResetTime: Date.now(),
   disabled: false,
   disabledTime: 0,
-  latencyMetrics: [],
+  methodLatencyEWMA: {},
   lastLatencyCalculation: 0,
   cachedAverageLatency: 0
 };
@@ -965,8 +965,10 @@ describe("smartTransport Tests", () => {
 
     // Check that latency metrics were recorded
     const updatedTransports = transportManager.getTransports();
-    expect(updatedTransports[0].transportState.latencyMetrics.length).to.be.greaterThan(0);
-    expect(updatedTransports[0].transportState.latencyMetrics[0].latency).to.be.greaterThan(3000);
+    const ewmaData = updatedTransports[0].transportState.methodLatencyEWMA['getLatestBlockhash'];
+    expect(ewmaData).to.not.be.undefined;
+    expect(ewmaData.sampleCount).to.be.greaterThan(0);
+    expect(ewmaData.ewma).to.be.greaterThan(3000);
   }).timeout(20000);
 });
 
