@@ -1,6 +1,10 @@
 import { Connection } from "@solana/web3.js";
 import Redis, { Cluster } from "ioredis";
-import { RateLimiterMemory, RateLimiterQueue, RateLimiterRedis } from "rate-limiter-flexible";
+import {
+  RateLimiterMemory,
+  RateLimiterQueue,
+  RateLimiterRedis,
+} from "rate-limiter-flexible";
 
 // Ideas:
 // - modify weight based on "closeness" to user. For example, first ping each provider and weight by response time.
@@ -27,9 +31,9 @@ const METHOD_LATENCY_THRESHOLDS: { [key: string]: number } = {
 };
 
 interface MethodLatencyEWMA {
-  ewma: number;           // Exponentially weighted moving average
-  lastUpdate: number;     // Timestamp of last update (using performance.now())
-  sampleCount: number;    // Count of samples contributing to this EWMA
+  ewma: number; // Exponentially weighted moving average
+  lastUpdate: number; // Timestamp of last update (using performance.now())
+  sampleCount: number; // Count of samples contributing to this EWMA
 }
 
 export interface TransportConfig {
@@ -68,6 +72,7 @@ export interface TransportManagerConfig {
   metricCallback?: MetricCallback;
   queueSize?: number;
   timeoutMs?: number;
+  methodTimeoutMs?: { [methodName: string]: number };
 }
 
 interface Metric {
@@ -94,19 +99,26 @@ export class TransportManager {
   private skipLastResortSends: boolean = false;
   private queueSize?: number;
   private timeoutMs?: number;
+  private methodTimeoutMs?: { [methodName: string]: number };
   smartConnection: Connection;
   fanoutConnection: Connection;
   raceConnection: Connection;
 
-  constructor(initialTransports: TransportConfig[], config?: TransportManagerConfig) {
+  constructor(
+    initialTransports: TransportConfig[],
+    config?: TransportManagerConfig
+  ) {
     this.strictPriorityMode = config?.strictPriorityMode ?? false;
     this.skipLastResortSends = config?.skipLastResortSends ?? false;
     this.metricCallback = config?.metricCallback;
     this.queueSize = config?.queueSize;
     this.timeoutMs = config?.timeoutMs;
+    this.methodTimeoutMs = config?.methodTimeoutMs;
     this.updateTransports(initialTransports);
 
-    const dummyConnection = new Connection(this.transports[0].transportConfig.url);
+    const dummyConnection = new Connection(
+      this.transports[0].transportConfig.url
+    );
 
     // NB: This does not work with non-async functions (e.g. subscription-related methods).
     this.smartConnection = new Proxy(dummyConnection, {
@@ -149,12 +161,18 @@ export class TransportManager {
     });
   }
 
-  settleAllWithTimeout = async <T>(promises: Array<Promise<T>>): Promise<Array<T>> => {
+  settleAllWithTimeout = async <T>(
+    promises: Array<Promise<T>>,
+    methodName?: string
+  ): Promise<Array<T>> => {
     const values: T[] = [];
 
     await Promise.allSettled(
       promises.map((promise) =>
-        Promise.race([promise, this.timeout(this.timeoutMs ?? DEFAULT_TIMEOUT_MS)])
+        Promise.race([
+          promise,
+          this.timeout(this.getMethodTimeoutMs(methodName)),
+        ])
       )
     ).then((result) =>
       result.forEach((d) => {
@@ -169,7 +187,9 @@ export class TransportManager {
 
   // Updates the list of transports based on the new configuration
   updateTransports(newTransports: TransportConfig[]): void {
-    this.transports = newTransports.map((config) => this.createTransport(config));
+    this.transports = newTransports.map((config) =>
+      this.createTransport(config)
+    );
   }
 
   updateMockTransports(newTransports: Transport[]) {
@@ -186,6 +206,16 @@ export class TransportManager {
 
   disableStrictPriorityMode(): void {
     this.strictPriorityMode = false;
+  }
+
+  getMethodTimeoutMs(methodName?: string): number {
+    if (methodName && this.methodTimeoutMs?.[methodName]) {
+      return this.methodTimeoutMs?.[methodName];
+    } else if (this.timeoutMs) {
+      return this.timeoutMs;
+    } else {
+      return DEFAULT_TIMEOUT_MS;
+    }
   }
 
   // Creates a transport object from configuration
@@ -226,7 +256,7 @@ export class TransportManager {
       rateLimiterQueue,
       methodLatencyEWMA: {},
       lastLatencyCalculation: 0,
-      cachedAverageLatency: 0
+      cachedAverageLatency: 0,
     };
 
     return {
@@ -242,7 +272,9 @@ export class TransportManager {
   private timeout(ms: number): Promise<any> {
     return new Promise((_, reject) => {
       setTimeout(() => {
-        reject(new TimeoutError(`Operation timed out after ${ms} milliseconds`));
+        reject(
+          new TimeoutError(`Operation timed out after ${ms} milliseconds`)
+        );
       }, ms);
     }) as Promise<any>;
   }
@@ -262,12 +294,17 @@ export class TransportManager {
     if (this.strictPriorityMode) {
       // Find and return the transport with the highest weight
       return availableTransports.reduce((max, transport) =>
-        max.transportConfig.weight > transport.transportConfig.weight ? max : transport
+        max.transportConfig.weight > transport.transportConfig.weight
+          ? max
+          : transport
       );
     }
 
     // Default weighted load balancing logic
-    let totalWeight = availableTransports.reduce((sum, t) => sum + t.transportConfig.weight, 0);
+    let totalWeight = availableTransports.reduce(
+      (sum, t) => sum + t.transportConfig.weight,
+      0
+    );
     let randomNum = Math.random() * totalWeight;
 
     for (const transport of availableTransports) {
@@ -282,7 +319,9 @@ export class TransportManager {
   }
 
   private availableTransportsForMethod(methodName) {
-    return this.transports.filter((t) => !t.transportConfig.blacklist.includes(methodName));
+    return this.transports.filter(
+      (t) => !t.transportConfig.blacklist.includes(methodName)
+    );
   }
 
   private async fanout(methodName, ...args): Promise<any[]> {
@@ -292,7 +331,10 @@ export class TransportManager {
       this.attemptSendWithRetries(transport, methodName, ...args)
     );
 
-    const results = await this.settleAllWithTimeout(transportPromises);
+    const results = await this.settleAllWithTimeout(
+      transportPromises,
+      methodName
+    );
 
     return results;
   }
@@ -303,7 +345,7 @@ export class TransportManager {
     const transportPromises = availableTransports.map((transport) =>
       Promise.race([
         this.attemptSendWithRetries(transport, methodName, ...args),
-        this.timeout(this.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+        this.timeout(this.getMethodTimeoutMs(methodName)),
       ])
     );
 
@@ -320,9 +362,12 @@ export class TransportManager {
     });
   }
 
-  private calculateAverageLatency(transport: Transport, methodName: string): number {
+  private calculateAverageLatency(
+    transport: Transport,
+    methodName: string
+  ): number {
     const now = performance.now();
-    
+
     // Return cached value if it's less than 1 second old
     if (now - transport.transportState.lastLatencyCalculation < 1000) {
       return transport.transportState.cachedAverageLatency;
@@ -330,68 +375,81 @@ export class TransportManager {
 
     // Get or initialize EWMA for this method
     const ewmaData = transport.transportState.methodLatencyEWMA[methodName];
-    
+
     if (!ewmaData || ewmaData.sampleCount === 0) {
       transport.transportState.cachedAverageLatency = 0;
       transport.transportState.lastLatencyCalculation = now;
       return 0;
     }
-    
+
     // Apply time-based decay to the EWMA
     const timeSinceLastUpdate = now - ewmaData.lastUpdate;
     const decayFactor = Math.exp(-timeSinceLastUpdate / EWMA_HALF_LIFE_MS);
     const currentEWMA = ewmaData.ewma * decayFactor;
-    
+
     // Cache the result
     transport.transportState.cachedAverageLatency = currentEWMA;
     transport.transportState.lastLatencyCalculation = now;
-    
+
     return currentEWMA;
   }
 
   private getLatencyThreshold(methodName: string): number {
-    return METHOD_LATENCY_THRESHOLDS[methodName] ?? DEFAULT_LATENCY_THRESHOLD_MS;
+    return (
+      METHOD_LATENCY_THRESHOLDS[methodName] ?? DEFAULT_LATENCY_THRESHOLD_MS
+    );
   }
 
-  private updateLatencyMetrics(transport: Transport, latency: number, methodName: string) {
+  private updateLatencyMetrics(
+    transport: Transport,
+    latency: number,
+    methodName: string
+  ) {
     const now = performance.now();
-    
+
     // Get or initialize EWMA for this method
     let ewmaData = transport.transportState.methodLatencyEWMA[methodName];
-    
+
     if (!ewmaData) {
       // Initialize new EWMA data for this method
       ewmaData = {
         ewma: latency,
         lastUpdate: now,
-        sampleCount: 1
+        sampleCount: 1,
       };
       transport.transportState.methodLatencyEWMA[methodName] = ewmaData;
       return;
     }
-    
+
     // Calculate time-based decay
     const timeSinceLastUpdate = now - ewmaData.lastUpdate;
     const decayFactor = Math.exp(-timeSinceLastUpdate / EWMA_HALF_LIFE_MS);
-    
+
     // Calculate smoothing factor (higher weight for newer values)
     // Alpha decreases as sample count increases, but never goes below 0.1
     const alpha = Math.max(0.1, 2.0 / (ewmaData.sampleCount + 1));
-    
+
     // Update EWMA: apply decay to old value, then blend with new value
     const decayedEWMA = ewmaData.ewma * decayFactor;
     ewmaData.ewma = alpha * latency + (1 - alpha) * decayedEWMA;
     ewmaData.lastUpdate = now;
-    ewmaData.sampleCount = Math.min(ewmaData.sampleCount + 1, MAX_EWMA_SAMPLE_COUNT);
+    ewmaData.sampleCount = Math.min(
+      ewmaData.sampleCount + 1,
+      MAX_EWMA_SAMPLE_COUNT
+    );
   }
 
-  private async sendRequest(transport: Transport, methodName, ...args): Promise<any> {
+  private async sendRequest(
+    transport: Transport,
+    methodName,
+    ...args
+  ): Promise<any> {
     let latencyStart = Date.now();
 
     try {
       const result = await Promise.race([
         transport.connection[methodName](...args),
-        this.timeout(this.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+        this.timeout(this.getMethodTimeoutMs(methodName)),
       ]);
 
       let latencyEnd = Date.now();
@@ -408,7 +466,12 @@ export class TransportManager {
       });
 
       // Check if average latency is too high even for successful requests
-      if (transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff && this.calculateAverageLatency(transport, methodName) > this.getLatencyThreshold(methodName)) {
+      if (
+        transport.transportConfig.enableSmartDisable &&
+        transport.transportConfig.enableLatencyCooloff &&
+        this.calculateAverageLatency(transport, methodName) >
+          this.getLatencyThreshold(methodName)
+      ) {
         transport.transportState.disabled = true;
         transport.transportState.disabledTime = Date.now();
       }
@@ -445,7 +508,10 @@ export class TransportManager {
       });
 
       // Reset error count if enough time has passed
-      if (currentTime - transport.transportState.lastErrorResetTime >= ERROR_RESET_MS) {
+      if (
+        currentTime - transport.transportState.lastErrorResetTime >=
+        ERROR_RESET_MS
+      ) {
         transport.transportState.errorCount = 0;
         transport.transportState.lastErrorResetTime = currentTime;
       }
@@ -459,7 +525,12 @@ export class TransportManager {
       ) {
         transport.transportState.disabled = true;
         transport.transportState.disabledTime = currentTime;
-      } else if (transport.transportConfig.enableSmartDisable && transport.transportConfig.enableLatencyCooloff && this.calculateAverageLatency(transport, methodName) > this.getLatencyThreshold(methodName)) {
+      } else if (
+        transport.transportConfig.enableSmartDisable &&
+        transport.transportConfig.enableLatencyCooloff &&
+        this.calculateAverageLatency(transport, methodName) >
+          this.getLatencyThreshold(methodName)
+      ) {
         transport.transportState.disabled = true;
         transport.transportState.disabledTime = currentTime;
       }
@@ -468,10 +539,16 @@ export class TransportManager {
     }
   }
 
-  private async enqueueRequest(transport: Transport, methodName, ...args): Promise<any> {
+  private async enqueueRequest(
+    transport: Transport,
+    methodName,
+    ...args
+  ): Promise<any> {
     // Ensure that the queue exists for this transport
     if (!transport.transportState.rateLimiterQueue) {
-      throw new Error("RateLimiterQueue is not initialized for this transport.");
+      throw new Error(
+        "RateLimiterQueue is not initialized for this transport."
+      );
     }
 
     // If queue is full, promise is rejected.
@@ -488,8 +565,16 @@ export class TransportManager {
     return await this.sendRequest(transport, methodName, ...args);
   }
 
-  private async attemptSendWithRetries(transport: Transport, methodName, ...args) {
-    for (let attempt = 0; attempt <= transport.transportConfig.maxRetries; attempt++) {
+  private async attemptSendWithRetries(
+    transport: Transport,
+    methodName,
+    ...args
+  ) {
+    for (
+      let attempt = 0;
+      attempt <= transport.transportConfig.maxRetries;
+      attempt++
+    ) {
       try {
         return await this.enqueueRequest(transport, methodName, ...args);
       } catch (error: any) {
@@ -515,14 +600,19 @@ export class TransportManager {
         }
 
         // Exponential backoff
-        let delay = Math.min(MAX_RETRY_DELAY, BASE_RETRY_DELAY * Math.pow(2, attempt));
+        let delay = Math.min(
+          MAX_RETRY_DELAY,
+          BASE_RETRY_DELAY * Math.pow(2, attempt)
+        );
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
 
-  // Smart transport function that selects a transport based on weight and checks for rate limit.
-  // It includes a retry mechanism with exponential backoff for handling HTTP 429 (Too Many Requests) errors.
+  /**
+   * Smart transport function that selects a transport based on weight and checks for rate limit.
+   * It includes a retry mechanism with exponential backoff for handling HTTP 429 (Too Many Requests) errors.
+   */
   async smartTransport(methodName, ...args): Promise<any[]> {
     let availableTransports = this.availableTransportsForMethod(methodName);
     let recentError: any = null;
@@ -532,19 +622,28 @@ export class TransportManager {
 
       if (transport.transportState.disabled) {
         // Check if transport should be re-enabled after cooloff period.
-        if (Date.now() - transport.transportState.disabledTime >= DISABLED_RESET_MS) {
+        if (
+          Date.now() - transport.transportState.disabledTime >=
+          DISABLED_RESET_MS
+        ) {
           transport.transportState.disabled = false;
           transport.transportState.disabledTime = 0;
         } else {
           // If transport is still in cooloff period, cycle to next transport.
-          availableTransports = availableTransports.filter((t) => t !== transport);
+          availableTransports = availableTransports.filter(
+            (t) => t !== transport
+          );
 
           continue;
         }
       }
 
       try {
-        return await this.attemptSendWithRetries(transport, methodName, ...args);
+        return await this.attemptSendWithRetries(
+          transport,
+          methodName,
+          ...args
+        );
       } catch (e) {
         // If failover is disabled, surface the error.
         if (!transport.transportConfig.enableFailover) {
@@ -564,7 +663,11 @@ export class TransportManager {
       let lastResortTransports = this.availableTransportsForMethod(methodName);
       for (let i = 0; i < lastResortTransports.length; i++) {
         try {
-          return await this.sendRequest(lastResortTransports[i], methodName, ...args);
+          return await this.sendRequest(
+            lastResortTransports[i],
+            methodName,
+            ...args
+          );
         } catch (error) {
           console.error(`Final attempt with transport failed: ${error}`);
         }
@@ -572,7 +675,9 @@ export class TransportManager {
     }
 
     // Throw error if all available transports have been tried without success
-    let error = recentError ?? new Error("No available transports for the requested method.");
+    let error =
+      recentError ??
+      new Error("No available transports for the requested method.");
     throw error;
   }
 }

@@ -6,7 +6,6 @@ import {
   Transport,
   TransportConfig,
   TransportManager,
-  DISABLED_RESET_MS,
 } from "../src/transport-manager";
 import { RateLimiterMemory, RateLimiterQueue } from "rate-limiter-flexible";
 
@@ -22,8 +21,14 @@ class HttpError extends Error {
 
 const MOCK_CONNECTION_ENDPOINT = "https://test.com";
 
-const mockConnectionResponse = { blockhash: "mockBlockhash", lastValidBlockHeight: 123456 };
-const mockConnectionSlowResponse = { blockhash: "mockBlockhashSlow", lastValidBlockHeight: 123455 };
+const mockConnectionResponse = {
+  blockhash: "mockBlockhash",
+  lastValidBlockHeight: 123456,
+};
+const mockConnectionSlowResponse = {
+  blockhash: "mockBlockhashSlow",
+  lastValidBlockHeight: 123455,
+};
 
 class MockConnection extends Connection {
   async getLatestBlockhash() {
@@ -80,6 +85,50 @@ class MockConnectionHighLatency extends Connection {
       }, 4000); // 4 seconds delay
     });
   }
+
+  async getAccountInfo(): Promise<any> {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        resolve({
+          data: "mockAccountData",
+          executable: false,
+          lamports: 1000000,
+        });
+      }, 4000); // 4 seconds delay
+    });
+  }
+}
+
+class MockConnectionMediumLatency extends Connection {
+  async getLatestBlockhash(): Promise<any> {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        resolve(mockConnectionResponse);
+      }, 100); // 100ms delay
+    });
+  }
+
+  async getAccountInfo(): Promise<any> {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        resolve({
+          data: "mockAccountData",
+          executable: false,
+          lamports: 1000000,
+        });
+      }, 100);
+    });
+  }
+
+  async getProgramAccounts(): Promise<any> {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        resolve([
+          { account: { data: "mockProgramAccountData" }, pubkey: "mockPubkey" },
+        ]);
+      }, 300);
+    });
+  }
 }
 
 const defaultTransportConfig: TransportConfig = {
@@ -91,7 +140,7 @@ const defaultTransportConfig: TransportConfig = {
   enableSmartDisable: true,
   enableFailover: false,
   maxRetries: 0,
-  enableLatencyCooloff: true
+  enableLatencyCooloff: true,
 };
 
 const defaultTransportState = {
@@ -101,13 +150,13 @@ const defaultTransportState = {
   disabledTime: 0,
   methodLatencyEWMA: {},
   lastLatencyCalculation: 0,
-  cachedAverageLatency: 0
+  cachedAverageLatency: 0,
 };
 
 describe("smartTransport Tests", () => {
   let transportManager;
 
-  function setupTransportManager(transportsConfig) {
+  function setupTransportManager(transportsConfig, managerConfig?) {
     let transports = transportsConfig.map((config) => {
       const rateLimiter = new RateLimiterMemory({
         points: config.rateLimiterConfig.points,
@@ -115,7 +164,10 @@ describe("smartTransport Tests", () => {
       });
 
       return {
-        transportConfig: { ...structuredClone(defaultTransportConfig), ...config.overrides },
+        transportConfig: {
+          ...structuredClone(defaultTransportConfig),
+          ...config.overrides,
+        },
         transportState: {
           ...structuredClone(defaultTransportState),
           rateLimiterQueue: new RateLimiterQueue(rateLimiter, {
@@ -126,7 +178,10 @@ describe("smartTransport Tests", () => {
       };
     });
 
-    transportManager = new TransportManager([defaultTransportConfig]);
+    transportManager = new TransportManager(
+      [defaultTransportConfig],
+      managerConfig
+    );
     transportManager.updateMockTransports(transports);
   }
 
@@ -140,7 +195,8 @@ describe("smartTransport Tests", () => {
 
     setupTransportManager(transportsConfig);
 
-    const response = await transportManager.smartConnection.getLatestBlockhash();
+    const response =
+      await transportManager.smartConnection.getLatestBlockhash();
 
     expect(response).to.deep.equal(mockConnectionResponse);
   });
@@ -149,7 +205,7 @@ describe("smartTransport Tests", () => {
     let statusCode: number | null | undefined = 0;
 
     const metricCallback: MetricCallback = (metricName, metricValue) => {
-      statusCode = metricValue.statusCode;
+      statusCode = metricValue.statusCode as number | null | undefined;
     };
 
     const config = {
@@ -157,7 +213,9 @@ describe("smartTransport Tests", () => {
       url: "https://tensor-tensor-ec08.mainnet.rpcpool.com",
     };
 
-    transportManager = new TransportManager([config], { metricCallback: metricCallback });
+    transportManager = new TransportManager([config], {
+      metricCallback: metricCallback,
+    });
 
     try {
       await transportManager.smartConnection.getLatestBlockhash();
@@ -220,7 +278,8 @@ describe("smartTransport Tests", () => {
     setupTransportManager(transportsConfig);
 
     for (var i = 0; i < 2; i++) {
-      const response = await transportManager.smartConnection.getLatestBlockhash();
+      const response =
+        await transportManager.smartConnection.getLatestBlockhash();
       expect(response).to.deep.equal(mockConnectionResponse);
     }
   });
@@ -244,7 +303,9 @@ describe("smartTransport Tests", () => {
       },
     ];
 
-    transportManager = new TransportManager([defaultTransportConfig], { timeoutMs: 1 });
+    transportManager = new TransportManager([defaultTransportConfig], {
+      timeoutMs: 1,
+    });
 
     transportManager.updateMockTransports(transports);
 
@@ -254,7 +315,9 @@ describe("smartTransport Tests", () => {
       expect.fail("Expected function to throw a timeout error");
     } catch (error) {
       expect(error).to.be.an("error");
-      expect(error.message).to.include("Operation timed out after 1 milliseconds");
+      expect(error.message).to.include(
+        "Operation timed out after 1 milliseconds"
+      );
     }
   });
 
@@ -277,11 +340,14 @@ describe("smartTransport Tests", () => {
       },
     ];
 
-    transportManager = new TransportManager([defaultTransportConfig], { timeoutMs: 1000 });
+    transportManager = new TransportManager([defaultTransportConfig], {
+      timeoutMs: 1000,
+    });
 
     transportManager.updateMockTransports(transports);
 
-    const response = await transportManager.smartConnection.getLatestBlockhash();
+    const response =
+      await transportManager.smartConnection.getLatestBlockhash();
     expect(response).to.deep.equal(mockConnectionSlowResponse);
   });
 
@@ -307,8 +373,14 @@ describe("smartTransport Tests", () => {
     const successResponses = results.filter((r) => r.status === "fulfilled");
     const failureResponses = results.filter((r) => r.status === "rejected");
 
-    expect(successResponses.length).to.equal(10, "Expected 10 successful responses");
-    expect(failureResponses.length).to.equal(10, "Expected 10 failed responses");
+    expect(successResponses.length).to.equal(
+      10,
+      "Expected 10 successful responses"
+    );
+    expect(failureResponses.length).to.equal(
+      10,
+      "Expected 10 failed responses"
+    );
 
     failureResponses.forEach((response) => {
       expect(response.reason.message).to.equal(
@@ -341,7 +413,10 @@ describe("smartTransport Tests", () => {
     const successResponses = results.filter((r) => r.status === "fulfilled");
     const failureResponses = results.filter((r) => r.status === "rejected");
 
-    expect(successResponses.length).to.equal(20, "Expected 20 successful responses");
+    expect(successResponses.length).to.equal(
+      20,
+      "Expected 20 successful responses"
+    );
     expect(failureResponses.length).to.equal(0, "Expected 0 failed responses");
 
     failureResponses.forEach((response) => {
@@ -373,7 +448,10 @@ describe("smartTransport Tests", () => {
 
     const successResponses = results.filter((r) => r.status === "fulfilled");
 
-    expect(successResponses.length).to.equal(200, "Expected 200 successful responses");
+    expect(successResponses.length).to.equal(
+      200,
+      "Expected 200 successful responses"
+    );
   });
 
   it("should handle burst to multiple connections", async () => {
@@ -413,7 +491,10 @@ describe("smartTransport Tests", () => {
 
     const successResponses = results.filter((r) => r.status === "fulfilled");
 
-    expect(successResponses.length).to.equal(2000, "Expected 2000 successful responses");
+    expect(successResponses.length).to.equal(
+      2000,
+      "Expected 2000 successful responses"
+    );
   });
 
   it("should handle burst to multiple connections with last resort", async () => {
@@ -443,7 +524,10 @@ describe("smartTransport Tests", () => {
 
     const successResponses = results.filter((r) => r.status === "fulfilled");
 
-    expect(successResponses.length).to.equal(2000, "Expected 2000 successful responses");
+    expect(successResponses.length).to.equal(
+      2000,
+      "Expected 2000 successful responses"
+    );
 
     for (var i = 0; i < successResponses.length; i++) {
       expect(successResponses[i].value).to.equal(mockConnectionResponse);
@@ -475,7 +559,10 @@ describe("smartTransport Tests", () => {
 
     const successResponses = results.filter((r) => r.status === "rejected");
 
-    expect(successResponses.length).to.equal(1000, "Expected 1000 failed responses");
+    expect(successResponses.length).to.equal(
+      1000,
+      "Expected 1000 failed responses"
+    );
   });
 
   it("should handle burst with failover", async () => {
@@ -510,7 +597,10 @@ describe("smartTransport Tests", () => {
 
     const successResponses = results.filter((r) => r.status === "fulfilled");
 
-    expect(successResponses.length).to.equal(200, "Expected 200 successful responses");
+    expect(successResponses.length).to.equal(
+      200,
+      "Expected 200 successful responses"
+    );
   });
 
   it("should handle burst with retries", async () => {
@@ -540,7 +630,10 @@ describe("smartTransport Tests", () => {
 
     const successResponses = results.filter((r) => r.status === "fulfilled");
 
-    expect(successResponses.length).to.equal(200, "Expected 200 successful responses");
+    expect(successResponses.length).to.equal(
+      200,
+      "Expected 200 successful responses"
+    );
   });
 
   it("should handle flaky connection with retries", async () => {
@@ -598,7 +691,10 @@ describe("smartTransport Tests", () => {
 
     const successResponses = results.filter((r) => r.status === "fulfilled");
 
-    expect(successResponses.length).to.equal(200, "Expected 200 successful responses");
+    expect(successResponses.length).to.equal(
+      200,
+      "Expected 200 successful responses"
+    );
   });
 
   it("should hit blacklisted method", async () => {
@@ -618,7 +714,9 @@ describe("smartTransport Tests", () => {
       expect.fail("Expected function to throw a No available transports error");
     } catch (error) {
       expect(error).to.be.an("error");
-      expect(error.message).to.include("No available transports for the requested method.");
+      expect(error.message).to.include(
+        "No available transports for the requested method."
+      );
     }
   });
 
@@ -633,7 +731,8 @@ describe("smartTransport Tests", () => {
 
     setupTransportManager(transportsConfig);
 
-    const response = await transportManager.smartConnection.getLatestBlockhash();
+    const response =
+      await transportManager.smartConnection.getLatestBlockhash();
 
     expect(response).to.deep.equal(mockConnectionResponse);
   });
@@ -724,7 +823,8 @@ describe("smartTransport Tests", () => {
 
     transportManager.updateMockTransports(updatedTransports);
 
-    const response = await transportManager.smartConnection.getLatestBlockhash();
+    const response =
+      await transportManager.smartConnection.getLatestBlockhash();
 
     expect(response).to.deep.equal(mockConnectionResponse);
   });
@@ -745,7 +845,8 @@ describe("smartTransport Tests", () => {
 
     setupTransportManager(transportsConfig);
 
-    const response = await transportManager.smartConnection.getLatestBlockhash();
+    const response =
+      await transportManager.smartConnection.getLatestBlockhash();
     expect(response).to.deep.equal(mockConnectionResponse);
   });
 
@@ -767,7 +868,10 @@ describe("smartTransport Tests", () => {
     setupTransportManager(transportsConfig);
 
     let results = await transportManager.fanoutConnection.getLatestBlockhash();
-    expect(results).to.deep.equal([mockConnectionResponse, mockConnectionResponse]);
+    expect(results).to.deep.equal([
+      mockConnectionResponse,
+      mockConnectionResponse,
+    ]);
   });
 
   it("should return 1 result", async () => {
@@ -965,11 +1069,270 @@ describe("smartTransport Tests", () => {
 
     // Check that latency metrics were recorded
     const updatedTransports = transportManager.getTransports();
-    const ewmaData = updatedTransports[0].transportState.methodLatencyEWMA['getLatestBlockhash'];
+    const ewmaData =
+      updatedTransports[0].transportState.methodLatencyEWMA[
+        "getLatestBlockhash"
+      ];
     expect(ewmaData).to.not.be.undefined;
     expect(ewmaData.sampleCount).to.be.greaterThan(0);
     expect(ewmaData.ewma).to.be.greaterThan(3000);
   }).timeout(20000);
+
+  it("should use method-specific timeout when configured", async () => {
+    const transportsConfig = [
+      {
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionSlow,
+      },
+    ];
+
+    setupTransportManager(transportsConfig, {
+      timeoutMs: 1000,
+      methodTimeoutMs: {
+        getLatestBlockhash: 25,
+        getAccountInfo: 200,
+      },
+    });
+
+    // Test method with short timeout (should timeout)
+    try {
+      await transportManager.smartConnection.getLatestBlockhash();
+      expect.fail("Expected function to throw a timeout error");
+    } catch (error) {
+      expect(error).to.be.an("error");
+      expect(error.message).to.include(
+        "Operation timed out after 25 milliseconds"
+      );
+    }
+  });
+
+  it("should use general timeout when method-specific timeout is not configured", async () => {
+    const transportsConfig = [
+      {
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionSlow,
+      },
+    ];
+
+    setupTransportManager(transportsConfig, {
+      timeoutMs: 25, // General timeout: 25ms (should timeout)
+      methodTimeoutMs: {
+        getAccountInfo: 200, // Only getAccountInfo has method-specific timeout, not blockhash
+      },
+    });
+
+    try {
+      await transportManager.smartConnection.getLatestBlockhash();
+      expect.fail("Expected function to throw a timeout error");
+    } catch (error) {
+      expect(error).to.be.an("error");
+      expect(error.message).to.include(
+        "Operation timed out after 25 milliseconds"
+      );
+    }
+  });
+
+  it("should use default timeout when neither method-specific nor general timeout is configured", async () => {
+    const transportsConfig = [
+      {
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionSlow,
+      },
+    ];
+
+    setupTransportManager(transportsConfig);
+
+    // Test method without any timeout configuration (should use default 5000ms and succeed)
+    const response =
+      await transportManager.smartConnection.getLatestBlockhash();
+    expect(response).to.deep.equal(mockConnectionSlowResponse);
+  });
+
+  it("should prioritize method-specific timeout over general timeout", async () => {
+    const transportsConfig = [
+      {
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionSlow,
+      },
+    ];
+
+    setupTransportManager(transportsConfig, {
+      timeoutMs: 25, // General timeout: 25ms (would timeout)
+      methodTimeoutMs: {
+        getLatestBlockhash: 200, // Method-specific timeout: 200ms (should succeed)
+      },
+    });
+
+    // Method-specific timeout should take precedence (200ms > 50ms delay, should succeed)
+    const response =
+      await transportManager.smartConnection.getLatestBlockhash();
+    expect(response).to.deep.equal(mockConnectionSlowResponse);
+  });
+
+  it("should apply per-method timeouts in fanout connection", async () => {
+    const transportsConfig = [
+      {
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionSlow, // 50ms delay
+      },
+      {
+        overrides: { id: "TEST2", url: "https://test2.connection" },
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionSlow, // 50ms delay
+      },
+    ];
+
+    setupTransportManager(transportsConfig, {
+      methodTimeoutMs: {
+        getLatestBlockhash: 200,
+      },
+    });
+
+    const results =
+      await transportManager.fanoutConnection.getLatestBlockhash();
+    expect(results).to.deep.equal([
+      mockConnectionSlowResponse,
+      mockConnectionSlowResponse,
+    ]);
+  });
+
+  it("should apply per-method timeouts in race connection", async () => {
+    const transportsConfig = [
+      {
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionHighLatency, // 4000ms delay
+      },
+      {
+        overrides: { id: "TEST2", url: "https://test2.connection" },
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionSlow, // 50ms delay
+      },
+    ];
+
+    setupTransportManager(transportsConfig, {
+      methodTimeoutMs: {
+        getLatestBlockhash: 200,
+      },
+    });
+
+    // Race should return the faster response (MockConnectionSlow)
+    const result = await transportManager.raceConnection.getLatestBlockhash();
+    expect(result).to.deep.equal(mockConnectionSlowResponse);
+  }).timeout(10000);
+
+  it("should handle multiple methods with different timeout configurations", async () => {
+    const transportsConfig = [
+      {
+        rateLimiterConfig: { points: 50, duration: 1, maxQueueSize: 500 },
+        connectionType: MockConnectionMediumLatency, // Various delays: 100ms for most, 300ms for getProgramAccounts
+      },
+    ];
+
+    setupTransportManager(transportsConfig, {
+      timeoutMs: 1000,
+      methodTimeoutMs: {
+        getLatestBlockhash: 50, // Should timeout (100ms delay > 50ms timeout)
+        getAccountInfo: 200, // Should succeed (100ms delay < 200ms timeout)
+        getProgramAccounts: 250, // Should timeout (300ms delay > 250ms timeout)
+      },
+    });
+
+    // Test getLatestBlockhash - should timeout
+    try {
+      await transportManager.smartConnection.getLatestBlockhash();
+      expect.fail("Expected getLatestBlockhash to timeout");
+    } catch (error) {
+      expect(error).to.be.an("error");
+      expect(error.message).to.include(
+        "Operation timed out after 50 milliseconds"
+      );
+    }
+
+    // Test getAccountInfo - should succeed
+    const accountInfo = await transportManager.smartConnection.getAccountInfo(
+      "mockPublicKey"
+    );
+    expect(accountInfo).to.deep.equal({
+      SmartRpcProvider: "MAINNET_BETA",
+      data: "mockAccountData",
+      executable: false,
+      lamports: 1000000,
+    });
+
+    // Test getProgramAccounts - should timeout
+    try {
+      await transportManager.smartConnection.getProgramAccounts(
+        "mockProgramId"
+      );
+      expect.fail("Expected getProgramAccounts to timeout");
+    } catch (error) {
+      expect(error).to.be.an("error");
+      expect(error.message).to.include(
+        "Operation timed out after 250 milliseconds"
+      );
+    }
+  });
+
+  it("should verify getMethodTimeoutMs returns correct values", async () => {
+    // Test with full configuration
+    const transportManager1 = new TransportManager([defaultTransportConfig], {
+      timeoutMs: 2000,
+      methodTimeoutMs: {
+        getLatestBlockhash: 500,
+        getAccountInfo: 1500,
+      },
+    });
+
+    expect(transportManager1.getMethodTimeoutMs("getLatestBlockhash")).to.equal(
+      500
+    );
+    expect(transportManager1.getMethodTimeoutMs("getAccountInfo")).to.equal(
+      1500
+    );
+    expect(transportManager1.getMethodTimeoutMs("getProgramAccounts")).to.equal(
+      2000
+    ); // Falls back to general timeout
+    expect(transportManager1.getMethodTimeoutMs()).to.equal(2000); // No method specified, uses general timeout
+
+    // Test with only general timeout
+    const transportManager2 = new TransportManager([defaultTransportConfig], {
+      timeoutMs: 3000,
+    });
+
+    expect(transportManager2.getMethodTimeoutMs("getLatestBlockhash")).to.equal(
+      3000
+    );
+    expect(transportManager2.getMethodTimeoutMs("getAccountInfo")).to.equal(
+      3000
+    );
+    expect(transportManager2.getMethodTimeoutMs()).to.equal(3000);
+
+    // Test with no timeout configuration (should use DEFAULT_TIMEOUT_MS = 5000)
+    const transportManager3 = new TransportManager([defaultTransportConfig]);
+
+    expect(transportManager3.getMethodTimeoutMs("getLatestBlockhash")).to.equal(
+      5000
+    );
+    expect(transportManager3.getMethodTimeoutMs("getAccountInfo")).to.equal(
+      5000
+    );
+    expect(transportManager3.getMethodTimeoutMs()).to.equal(5000);
+
+    // Test with only method-specific timeouts
+    const transportManager4 = new TransportManager([defaultTransportConfig], {
+      methodTimeoutMs: {
+        getLatestBlockhash: 800,
+      },
+    });
+
+    expect(transportManager4.getMethodTimeoutMs("getLatestBlockhash")).to.equal(
+      800
+    );
+    expect(transportManager4.getMethodTimeoutMs("getAccountInfo")).to.equal(
+      5000
+    ); // Falls back to default
+    expect(transportManager4.getMethodTimeoutMs()).to.equal(5000); // No method specified, uses default
+  });
 });
 
 describe("selectTransport Tests", () => {
@@ -1062,5 +1425,4 @@ describe("selectTransport Tests", () => {
       expect(selected).to.equal(transports[1]);
     }
   });
-  
 });
