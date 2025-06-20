@@ -171,7 +171,7 @@ export class TransportManager {
       promises.map((promise) =>
         Promise.race([
           promise,
-          this.timeout(this.getMethodTimeoutMs(methodName)),
+          this.timeout(this.getRequestTimeoutMs(methodName)),
         ])
       )
     ).then((result) =>
@@ -208,7 +208,7 @@ export class TransportManager {
     this.strictPriorityMode = false;
   }
 
-  getMethodTimeoutMs(methodName?: string): number {
+  getRequestTimeoutMs(methodName?: string): number {
     if (methodName && this.methodTimeoutMs?.[methodName]) {
       return this.methodTimeoutMs?.[methodName];
     } else if (this.timeoutMs) {
@@ -345,7 +345,7 @@ export class TransportManager {
     const transportPromises = availableTransports.map((transport) =>
       Promise.race([
         this.attemptSendWithRetries(transport, methodName, ...args),
-        this.timeout(this.getMethodTimeoutMs(methodName)),
+        this.timeout(this.getRequestTimeoutMs(methodName)),
       ])
     );
 
@@ -449,7 +449,7 @@ export class TransportManager {
     try {
       const result = await Promise.race([
         transport.connection[methodName](...args),
-        this.timeout(this.getMethodTimeoutMs(methodName)),
+        this.timeout(this.getRequestTimeoutMs(methodName)),
       ]);
 
       let latencyEnd = Date.now();

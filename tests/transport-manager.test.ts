@@ -1273,7 +1273,7 @@ describe("smartTransport Tests", () => {
     }
   });
 
-  it("should verify getMethodTimeoutMs returns correct values", async () => {
+  it("should verify getRequestTimeoutMs returns correct values", async () => {
     // Test with full configuration
     const transportManager1 = new TransportManager([defaultTransportConfig], {
       timeoutMs: 2000,
@@ -1283,40 +1283,40 @@ describe("smartTransport Tests", () => {
       },
     });
 
-    expect(transportManager1.getMethodTimeoutMs("getLatestBlockhash")).to.equal(
-      500
-    );
-    expect(transportManager1.getMethodTimeoutMs("getAccountInfo")).to.equal(
+    expect(
+      transportManager1.getRequestTimeoutMs("getLatestBlockhash")
+    ).to.equal(500);
+    expect(transportManager1.getRequestTimeoutMs("getAccountInfo")).to.equal(
       1500
     );
-    expect(transportManager1.getMethodTimeoutMs("getProgramAccounts")).to.equal(
-      2000
-    ); // Falls back to general timeout
-    expect(transportManager1.getMethodTimeoutMs()).to.equal(2000); // No method specified, uses general timeout
+    expect(
+      transportManager1.getRequestTimeoutMs("getProgramAccounts")
+    ).to.equal(2000); // Falls back to general timeout
+    expect(transportManager1.getRequestTimeoutMs()).to.equal(2000); // No method specified, uses general timeout
 
     // Test with only general timeout
     const transportManager2 = new TransportManager([defaultTransportConfig], {
       timeoutMs: 3000,
     });
 
-    expect(transportManager2.getMethodTimeoutMs("getLatestBlockhash")).to.equal(
+    expect(
+      transportManager2.getRequestTimeoutMs("getLatestBlockhash")
+    ).to.equal(3000);
+    expect(transportManager2.getRequestTimeoutMs("getAccountInfo")).to.equal(
       3000
     );
-    expect(transportManager2.getMethodTimeoutMs("getAccountInfo")).to.equal(
-      3000
-    );
-    expect(transportManager2.getMethodTimeoutMs()).to.equal(3000);
+    expect(transportManager2.getRequestTimeoutMs()).to.equal(3000);
 
     // Test with no timeout configuration (should use DEFAULT_TIMEOUT_MS = 5000)
     const transportManager3 = new TransportManager([defaultTransportConfig]);
 
-    expect(transportManager3.getMethodTimeoutMs("getLatestBlockhash")).to.equal(
+    expect(
+      transportManager3.getRequestTimeoutMs("getLatestBlockhash")
+    ).to.equal(5000);
+    expect(transportManager3.getRequestTimeoutMs("getAccountInfo")).to.equal(
       5000
     );
-    expect(transportManager3.getMethodTimeoutMs("getAccountInfo")).to.equal(
-      5000
-    );
-    expect(transportManager3.getMethodTimeoutMs()).to.equal(5000);
+    expect(transportManager3.getRequestTimeoutMs()).to.equal(5000);
 
     // Test with only method-specific timeouts
     const transportManager4 = new TransportManager([defaultTransportConfig], {
@@ -1325,13 +1325,13 @@ describe("smartTransport Tests", () => {
       },
     });
 
-    expect(transportManager4.getMethodTimeoutMs("getLatestBlockhash")).to.equal(
-      800
-    );
-    expect(transportManager4.getMethodTimeoutMs("getAccountInfo")).to.equal(
+    expect(
+      transportManager4.getRequestTimeoutMs("getLatestBlockhash")
+    ).to.equal(800);
+    expect(transportManager4.getRequestTimeoutMs("getAccountInfo")).to.equal(
       5000
     ); // Falls back to default
-    expect(transportManager4.getMethodTimeoutMs()).to.equal(5000); // No method specified, uses default
+    expect(transportManager4.getRequestTimeoutMs()).to.equal(5000); // No method specified, uses default
   });
 });
 
