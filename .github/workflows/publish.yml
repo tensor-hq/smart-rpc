@@ -1,0 +1,72 @@
+name: Publish Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_target:
+        description: "Select publishing target"
+        required: true
+        default: "both"
+        type: choice
+        options:
+          - private
+          - public
+          - both
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    # Only run on main branch
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: "yarn"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run tests before publishing
+        run: yarn test
+
+      - name: Build project
+        run: yarn build
+
+      - name: Configure npm for GitHub Packages
+        if: ${{ github.event.inputs.publish_target == 'private' || github.event.inputs.publish_target == 'both' }}
+        run: |
+          echo "@tensor-hq:registry=https://npm.pkg.github.com" >> ~/.npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> ~/.npmrc
+
+      - name: Publish to private registry (GitHub Packages)
+        if: ${{ github.event.inputs.publish_target == 'private' || github.event.inputs.publish_target == 'both' }}
+        run: yarn publish:private
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure npm for public registry
+        if: ${{ github.event.inputs.publish_target == 'public' || github.event.inputs.publish_target == 'both' }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
+
+      - name: Publish to public registry (npm)
+        if: ${{ github.event.inputs.publish_target == 'public' || github.event.inputs.publish_target == 'both' }}
+        run: yarn publish:public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish summary
+        run: |
+          echo "## 📦 Publish Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Target:** ${{ github.event.inputs.publish_target }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Package:** @tensor-hq/smart-rpc" >> $GITHUB_STEP_SUMMARY
