@@ -21,6 +21,13 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
+      - name: Workflow security info
+        run: |
+          echo "## 🔒 Security Info" >> $GITHUB_STEP_SUMMARY
+          echo "- Workflow triggered by: **${{ github.actor }}**" >> $GITHUB_STEP_SUMMARY
+          echo "- Branch: **${{ github.ref_name }}**" >> $GITHUB_STEP_SUMMARY
+          echo "- This workflow is protected by CODEOWNERS" >> $GITHUB_STEP_SUMMARY
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -70,3 +77,4 @@ jobs:
           echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "**Package:** @tensor-hq/smart-rpc" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
