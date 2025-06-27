@@ -1,0 +1,4 @@
+* @richardwu @ilmoi @dbvora03 @harrisluo @avoc-ado @nftechie # added whoever added a commit to this in the past
+
+# Protect the CODEOWNERS file itself
+.github/CODEOWNERS @richardwu @ilmoi @paul-merugu
